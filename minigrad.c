@@ -166,10 +166,7 @@ typedef struct Tensor {
 	// recipe
 	Operation op;
 	unsigned arg0; // index in tape
-	union {
-		unsigned arg1;
-		float exponenet; // to avoid gradient
-	};
+	unsigned arg1; // index in tape
 } Tensor;
 
 typedef struct WengertList {
@@ -476,36 +473,38 @@ Tensor_pow(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	unsigned lhs,
-	float rhs
+	unsigned rhs
 ) {
 	assert(Arena_invariant(alloc));
 	assert(WengertList_invariant(tape));
 
-	if (lhs >= tape->used) {
+	if (lhs >= tape->used || rhs >= tape->used) {
 		return 0;
 	}
 
 	Tensor *lhs_tensor = tape->tensors + lhs;
+	Tensor *rhs_tensor = tape->tensors + rhs;
+	if (rhs_tensor->rows*rhs_tensor->cols != 1) {
+		return 0;
+	}
 
 	unsigned numel = lhs_tensor->rows*lhs_tensor->cols;
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
 	for (unsigned i = 0; i < numel; i++) {
-		data[i] = powf(lhs_tensor->value[i], rhs);
+		data[i] = powf(lhs_tensor->value[i], rhs_tensor->value[0]);
 	}
 	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
 	Tensor t = {
 		.value = data, .grad = data + numel,
 		.rows = lhs_tensor->rows, .cols = lhs_tensor->cols,
-		.op = Operation_pow, .arg0 = lhs, .exponenet = rhs,
+		.op = Operation_pow, .arg0 = lhs, .arg1 = rhs,
 	};
 	WengertList_append(tape, t);
 	assert(WengertList_invariant(tape));
 	return tape->used - 1;
-
-	return 0;
 }
 
 static unsigned
@@ -578,6 +577,7 @@ Tensor_backprop(WengertList tape[static 1]) {
 	for (unsigned i = tape->used; i-- > 0;) {
 		Tensor *t = tape->tensors + i;
 		Tensor *arg0 = tape->tensors + t->arg0;
+		Tensor *arg1 = tape->tensors + t->arg1;
 		switch (t->op) {
 			case Operation_nop:
 				break;
@@ -595,7 +595,8 @@ Tensor_backprop(WengertList tape[static 1]) {
 				// z = 𝜎(y)
 				// jvp = grad[z] * z⋅(1-z)
 				// grad[y] += jvp;
-				for (unsigned i = 0; i < t->rows*t->cols; i++) {
+				unsigned numel = t->rows*t->cols;
+				for (unsigned i = 0; i < numel; i++) {
 					arg0->grad[i] += t->grad[i] * t->value[i]*(1-t->value[i]);
 				}
 			} break;
@@ -605,7 +606,7 @@ Tensor_backprop(WengertList tape[static 1]) {
 				// grad[y] += jvp
 				float alpha = -1;
 				int incx = 1, incy = 1;
-				unsigned numel = arg0->rows*arg0->cols;
+				unsigned numel = t->rows*t->cols;
 				cblas_saxpy(numel, alpha, t->grad, incx, arg0->grad, incy);
 			} break;
 			// TODO: support broadcasting in backpropagation.
@@ -619,7 +620,6 @@ Tensor_backprop(WengertList tape[static 1]) {
 				int incx = 1, incy = 1;
 				unsigned numel = t->rows*t->cols;
 
-				Tensor *arg1 = tape->tensors + t->arg1;
 				cblas_saxpy(numel, alpha, t->grad, incx, arg0->grad, incy);
 				cblas_saxpy(numel, alpha, t->grad, incx, arg1->grad, incy);
 			} break;
@@ -632,7 +632,6 @@ Tensor_backprop(WengertList tape[static 1]) {
 				unsigned numel = t->rows*t->cols;
 
 				// cblas_sgbmv https://stackoverflow.com/a/13433038
-				Tensor *arg1 = tape->tensors + t->arg1;
 				for (unsigned i = 0; i < numel; i++) {
 					arg0->grad[i] += t->grad[i] * arg1->value[i];
 				}
@@ -641,28 +640,48 @@ Tensor_backprop(WengertList tape[static 1]) {
 				}
 			} break;
 			case Operation_pow: {
-				// TODO: support backpropagation through the exponenet (only
-				// scalar upported)
 				// z = y_1^y_2
 				// jvp_1 = grad[z] * y_2*y_1^(y_2-1)
-				// jvp_2 = grad[z] * z * ln(y_1) * grad[y_2]
+				// jvp_2 = grad[z] * z * ln(y_1)
 				// grad[y_1] += jvp_1
 				// grad[y_2] += jvp_2
-				// TODO: can we backpropagate through y_2 or we hace some sort of circularity?
 
 				unsigned numel = t->rows*t->cols;
 				for (unsigned i = 0; i < numel; i++) {
-					arg0->grad[i] += t->grad[i] * powf(arg0->value[i], t->exponenet-1);
+					arg0->grad[i] += t->grad[i] * arg1->value[0] * powf(arg0->value[i], arg1->value[0]-1);
+				}
+				// https://github.com/mattjj/autodidact/blob/master/autograd/numpy/numpy_vjps.py#L37
+				// https://github.com/mattjj/autodidact/blob/master/autograd/numpy/numpy_vjps.py#L31
+				// Basically due to the total derivative when we broadcast we
+				// sum the contributions of all the broadcasted/copied values.
+				// Here the broadcasting is implicit in the sense that the
+				// single value of the exponenet is broadcasted in a matrix of
+				// the same shape of arg0 so that every number in that matrix
+				// has its own exponent.
+				//                ⎡e e⎤
+				//      e         ⎣e e⎦
+				// ⎡a b⎤  =  ⎡a b⎤
+				// ⎣c d⎦  =  ⎣c d⎦
+				// Is like when we do this in scalar code
+				// e = something
+				// x1 = a^e
+				// x2 = b^e
+				// x3 = c^e
+				// x4 = d^e
+				// When back propagating through this we have to sum all the
+				// contibutions of the various expontials since we reuse e.
+				for (unsigned i = 0; i < numel; i++) {
+					arg1->grad[0] += t->grad[i] * t->value[0] * logf(arg0->value[i]);
 				}
 			} break;
 			case Operation_dot: {
+				// https://pdfs.semanticscholar.org/c74c/5e11ed05246c12165ce7e4b6222bd32d68dc.pdf
 				// z = y_1 y_2
 				// jvp_1 = grad[z] * y_2^T
 				// jpv_2 = y_1^T * grad[z]
 				// y_1 += jvp_1
 				// y_2 += jvp_2
-				
-				Tensor *arg1 = tape->tensors + t->arg1;
+
 				float alpha = 1, beta = 1; // β=1 to perform the accumulation.
 				// MxK * KxN = MxN
 				unsigned M = t->rows, N = arg1->rows, K = t->cols;
