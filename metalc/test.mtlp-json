@@ -1,0 +1,9 @@
+{
+ "pipelines": {
+  "compute_pipelines": [
+    {
+     "compute_function": "add_arrays"
+    }
+  ]
+ }
+}
