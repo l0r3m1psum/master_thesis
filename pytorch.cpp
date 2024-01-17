@@ -21,6 +21,12 @@ int main() {
 	auto c = (a + b).sum();
 	c.backward();
 	std::cout << a.grad() << '\n';
-	
+
+	int64_t numel = a.size(0)*a.size(1);
+
+	for (int64_t i = 0; i < numel; i++) {
+		std::cout << a.flatten()[i].item().equal(0) << ' ';
+	}
+
 	return 0;
 }

@@ -22,6 +22,17 @@ target_link_libraries(metal_test "-framework Metal")
 
 add_custom_target(digest SOURCES digest.md)
 
+add_executable(compare_with_torch "pytorch.cpp")
+set_property(TARGET compare_with_torch PROPERTY CXX_STANDARD 17)
+# https://duerrenberger.dev/blog/2021/08/04/understanding-rpath-with-cmake/
+set_property(TARGET compare_with_torch PROPERTY CMAKE_INSTALL_RPATH "~/local/lib")
+target_include_directories(compare_with_torch
+	PUBLIC "~/local/include/torch/csrc/api/include/"
+	PUBLIC "~/local/include")
+target_link_directories(compare_with_torch PUBLIC "~/local/lib")
+target_link_libraries(compare_with_torch "c10" "torch_cpu")
+
+
 find_package(Python REQUIRED)
 add_test(NAME Pytorch COMMAND ${Python_EXECUTABLE} pytorch.py)
 
