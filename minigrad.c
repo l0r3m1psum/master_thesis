@@ -13,7 +13,7 @@
 //   * https://www.cse-lab.ethz.ch/wp-content/uploads/2020/10/Linear-Algebra-BLAS-ISA-Pipelining.pdf
 //   * https://stackoverflow.com/a/37891808
 //   * https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2024-0/cblas-gemm-001.html
-// Honestly Intel has the best BlAS documentation.
+// Honestly Intel has the best BLAS documentation.
 
 #define ACCELERATE_NEW_LAPACK
 #define ACCELERATE_LAPACK_ILP64
@@ -697,6 +697,48 @@ Tensor_backprop(WengertList tape[static 1]) {
 	}
 }
 
+void test_linear_layer_and_mse_loss(
+	float *Wgrad, float *Xgrad, float *Bgrad, float *Ygrad, float *TWOgrad
+) {
+	Arena *alloc = &(Arena){
+		.data = calloc(4 * (1 << 10), 1),
+		.size = 4 * (1 << 10),
+		.used = 0,
+	};
+	if (!alloc->data) {
+		perror("calloc");
+		return 1;
+	}
+
+	WengertList *tape = &WengerList_FROM_ARRAY((Tensor [1 << 7]){0});
+	tape->used++; // To create the empty tensor.
+
+	// sum((sigmoid(W@X + B) - Y)^2)
+	unsigned W = Tensor_new(alloc, tape, 1, 3, 3);
+	unsigned X = Tensor_new(alloc, tape, 2, 3, 2);
+	unsigned B = Tensor_new(alloc, tape, 3, 3, 2);
+	unsigned Y = Tensor_new(alloc, tape, 4, 3, 2);
+	unsigned TWO = Tensor_new(alloc, tape, 2, 1, 1);
+
+	unsigned linear = Tensor_sigmoid(alloc, tape,
+		Tensor_add(alloc, tape, Tensor_matmul(alloc, tape, W, X), B));
+
+	unsigned L = Tensor_sum(alloc, tape, Tensor_pow(alloc, tape,
+		Tensor_add(alloc, tape, linear, Tensor_negate(alloc, tape, Y)), TWO));
+
+	assert(L != 0);
+	Tensor_backprop(tape);
+
+	int INCY = 1, INCX = 1;
+	cblas_scopy(3*3, tape->tensors[W].grad, INCX, Wgrad, INCY);
+	cblas_scopy(3*2, tape->tensors[X].grad, INCX, Xgrad, INCY);
+	cblas_scopy(3*2, tape->tensors[B].grad, INCX, Bgrad, INCY);
+	cblas_scopy(3*2, tape->tensors[Y].grad, INCX, Ygrad, INCY);
+	cblas_scopy(1*1, tape->tensors[TWO].grad, INCX, TWOgrad, INCY);
+}
+
+#ifdef TEST
+
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -744,3 +786,5 @@ int main(void) {
 	// The resilt that I get in x.grad are non sensical or is it fine???
 	return 0;
 }
+
+#endif

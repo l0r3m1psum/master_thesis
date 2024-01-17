@@ -3,10 +3,14 @@ project(Thesis)
 
 add_executable(minigrad "minigrad.c")
 target_link_libraries(minigrad "-framework Accelerate")
+target_compile_definitions(minigrad PUBLIC "TEST")
+
 add_executable(blas "blas.c")
 target_link_libraries(blas "-framework Accelerate")
+
 add_executable(dbml "dbml.c")
 # add_test(NAME test COMMAND dbml)
+
 set_source_files_properties("kernels.metal" PROPERTIES LANGUAGE METAL)
 add_executable(metal "metal.m" "kernels.metal" "metal_common.h")
 # FIXME: xcode does not like external symbols. How do I tell Cmake to generate
@@ -22,7 +26,7 @@ target_link_libraries(metal_test "-framework Metal")
 
 add_custom_target(digest SOURCES digest.md)
 
-add_executable(compare_with_torch "pytorch.cpp")
+add_executable(compare_with_torch "pytorch.cpp" "minigrad.c")
 set_property(TARGET compare_with_torch PROPERTY CXX_STANDARD 17)
 # https://duerrenberger.dev/blog/2021/08/04/understanding-rpath-with-cmake/
 set_property(TARGET compare_with_torch PROPERTY CMAKE_INSTALL_RPATH "~/local/lib")
@@ -31,6 +35,7 @@ target_include_directories(compare_with_torch
 	PUBLIC "~/local/include")
 target_link_directories(compare_with_torch PUBLIC "~/local/lib")
 target_link_libraries(compare_with_torch "c10" "torch_cpu")
+target_link_libraries(compare_with_torch "-framework Accelerate")
 
 
 find_package(Python REQUIRED)
