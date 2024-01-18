@@ -1,11 +1,13 @@
+# https://cmake.org/cmake/help/latest/index.html
+
 cmake_minimum_required(VERSION 3.12)
 project(Thesis)
 
-add_executable(minigrad "minigrad.c" "blas.c")
+add_executable(minigrad "minigrad.c" "blas.c" "blas.h")
 target_compile_definitions(minigrad PUBLIC "TEST_minigrad")
 target_link_libraries(minigrad "-framework Accelerate")
 
-add_executable(blas "blas.c")
+add_executable(blas "blas.c" "blas.h")
 target_compile_definitions(blas PUBLIC "TEST_blas")
 target_link_libraries(blas "-framework Accelerate")
 
@@ -22,9 +24,6 @@ add_custom_command(TARGET metal POST_BUILD
 set_target_properties(metal PROPERTIES XCODE_SCHEME_ENVIRONMENT "MTL_CAPTURE_ENABLED=1")
 target_link_libraries(metal "-framework Metal" "-framework MetalPerformanceShaders")
 
-add_executable(metal_test "metal_test.m")
-target_link_libraries(metal_test "-framework Metal")
-
 add_custom_target(digest SOURCES digest.md)
 
 add_executable(compare_with_torch "pytorch.cpp" "minigrad.c")
@@ -37,10 +36,6 @@ target_include_directories(compare_with_torch
 target_link_directories(compare_with_torch PUBLIC "~/local/lib")
 target_link_libraries(compare_with_torch "c10" "torch_cpu")
 target_link_libraries(compare_with_torch "-framework Accelerate")
-
-
-find_package(Python REQUIRED)
-add_test(NAME Pytorch COMMAND ${Python_EXECUTABLE} pytorch.py)
 
 # return()
 
