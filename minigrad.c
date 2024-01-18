@@ -154,6 +154,12 @@ Mat_same_shape(const Mat a[static 1], const Mat b[static 1]) {
 	return a->rows == b->rows && a->cols == b->cols;
 }
 
+static unsigned
+Mat_numel(const Mat a[static 1]) {
+	assert(Mat_invariant(a));
+	return a->rows*a->cols;
+}
+
 static float
 sigmoid(float x) {
 	return 1.f/(1.f+expf(-x));
@@ -214,7 +220,7 @@ Mat_sum(
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
-	*data = cblas_sdot(x_tensor->rows*x_tensor->cols, (float[]){1}, 0, x_tensor->value, 1);
+	*data = cblas_sdot(Mat_numel(x_tensor), (float[]){1}, 0, x_tensor->value, 1);
 	*(data+numel) = 0;
 	// cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
@@ -243,7 +249,7 @@ Mat_sigmoid(
 
 	Mat *x_tensor = tape->mats + x;
 
-	unsigned numel = x_tensor->rows*x_tensor->cols;
+	unsigned numel = Mat_numel(x_tensor);
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
@@ -277,7 +283,7 @@ Mat_negate(
 
 	Mat *x_tensor = tape->mats + x;
 
-	unsigned numel = x_tensor->rows*x_tensor->cols;
+	unsigned numel = Mat_numel(x_tensor);
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
@@ -317,7 +323,7 @@ Mat_add(
 		return 0;
 	}
 	
-	unsigned numel = lhs_tensor->rows*lhs_tensor->cols;
+	unsigned numel = Mat_numel(lhs_tensor);
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
@@ -360,7 +366,7 @@ Mat_mul(
 		return 0;
 	}
 
-	unsigned numel = lhs_tensor->rows*lhs_tensor->cols;
+	unsigned numel = Mat_numel(lhs_tensor);
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
@@ -401,7 +407,7 @@ Mat_pow(
 		return 0;
 	}
 
-	unsigned numel = lhs_tensor->rows*lhs_tensor->cols;
+	unsigned numel = Mat_numel(lhs_tensor);
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
@@ -462,11 +468,6 @@ Mat_matmul(Arena alloc[static 1],
 	return tape->used - 1;
 }
 
-// implementare backprop, fare la parte del broadcasting, scrivere dei test con
-// vari tensori vuoti, dimensioni broadcasting e ovviemente precisione numerica.
-// Implementare il linear layer!
-// TIME TO SLAY THE DRAGON!
-
 static void
 Mat_backprop(WengertList tape[static 1]) {
 	assert(WengertList_invariant(tape));
@@ -500,15 +501,14 @@ Mat_backprop(WengertList tape[static 1]) {
 				// grad[y] += jvp
 				float alpha = 1;
 				int incx = 0, incy = 1;
-				unsigned numel = arg0->rows*arg0->cols;
-				assert(t->rows*t->cols == 1);
-				cblas_saxpy(numel, alpha, t->grad, incx, arg0->grad, incy);
+				assert(Mat_numel(t) == 1);
+				cblas_saxpy(Mat_numel(arg0), alpha, t->grad, incx, arg0->grad, incy);
 			} break;
 			case Operation_sig: {
 				// z = 𝜎(y)
 				// jvp = grad[z] * z⋅(1-z)
 				// grad[y] += jvp;
-				unsigned numel = t->rows*t->cols;
+				unsigned numel = Mat_numel(t);
 				for (unsigned i = 0; i < numel; i++) {
 					arg0->grad[i] += t->grad[i] * t->value[i]*(1-t->value[i]);
 				}
@@ -519,7 +519,7 @@ Mat_backprop(WengertList tape[static 1]) {
 				// grad[y] += jvp
 				float alpha = -1;
 				int incx = 1, incy = 1;
-				unsigned numel = t->rows*t->cols;
+				unsigned numel = Mat_numel(t);
 				cblas_saxpy(numel, alpha, t->grad, incx, arg0->grad, incy);
 			} break;
 			// TODO: support broadcasting in backpropagation.
@@ -531,7 +531,7 @@ Mat_backprop(WengertList tape[static 1]) {
 				// grad[y_2] += jvp_2
 				float alpha = 1;
 				int incx = 1, incy = 1;
-				unsigned numel = t->rows*t->cols;
+				unsigned numel = Mat_numel(t);
 
 				cblas_saxpy(numel, alpha, t->grad, incx, arg0->grad, incy);
 				cblas_saxpy(numel, alpha, t->grad, incx, arg1->grad, incy);
@@ -542,7 +542,7 @@ Mat_backprop(WengertList tape[static 1]) {
 				// jvp_2 = grad[z] * y_1*1
 				// grad[y_1] += jvp_1
 				// grad[y_2] += jvp_2
-				unsigned numel = t->rows*t->cols;
+				unsigned numel = Mat_numel(t);
 
 				// cblas_sgbmv https://stackoverflow.com/a/13433038
 				for (unsigned i = 0; i < numel; i++) {
@@ -559,7 +559,7 @@ Mat_backprop(WengertList tape[static 1]) {
 				// grad[y_1] += jvp_1
 				// grad[y_2] += jvp_2
 
-				unsigned numel = t->rows*t->cols;
+				unsigned numel = Mat_numel(t);
 				for (unsigned i = 0; i < numel; i++) {
 					arg0->grad[i] += t->grad[i] * arg1->value[0] * powf(arg0->value[i], arg1->value[0]-1);
 				}
