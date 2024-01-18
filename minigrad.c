@@ -149,7 +149,7 @@ typedef enum Operation {
 	// 1-arity
 	Operation_sum, // reduction
 	Operation_sig, // sigmoid
-	Operation_neg,  // negation
+	Operation_neg, // negation
 	// 2-arity
 	Operation_add, // element-wise (with broadcasting)
 	Operation_mul, // element-wise (with broadcasting)
@@ -160,26 +160,26 @@ typedef enum Operation {
 #define Operation_IS_BINARY(op) ((op) >= Operation_add)
 
 // NOTE: probably passing tensor by value is even better due to the way in which the calling convention works.
-typedef struct Tensor {
+typedef struct Mat {
 	float *value, *grad; // always the same shape.
 	unsigned rows, cols;
 	// recipe
 	Operation op;
 	unsigned arg0; // index in tape
 	unsigned arg1; // index in tape
-} Tensor;
+} Mat;
 
 typedef struct WengertList {
-	Tensor *tensors;
+	Mat *mats;
 	unsigned size;
 	unsigned used;
 } WengertList;
 
 #define WengerList_FROM_ARRAY(a) \
-	((WengertList){.tensors = (a), .size = ARRAY_LEN(a)})
+	((WengertList){.mats = (a), .size = ARRAY_LEN(a)})
 
 static bool
-Tensor_invariant(const Tensor *t) {
+Mat_invariant(const Mat *t) {
 	if (!t) return false;
 	// NOTE: if before operating on the tensors I check the number of elements I can relax this.
 	if (!IFF(t->rows == 0, t->cols == 0)) return false;
@@ -197,21 +197,21 @@ Tensor_invariant(const Tensor *t) {
 static bool
 WengertList_invariant(const WengertList *tape) {
 	if (!tape) return false;
-	if (tape->tensors == NULL && tape->size != 0) return false;
+	if (tape->mats == NULL && tape->size != 0) return false;
 	if (tape->used > tape->size) return false;
 	// If tape->size == 0 than tape->tensors is don't-care.
 
 	// The first tensor must be an empty one.
-	static const unsigned char empty_tensor[sizeof (Tensor)] = {0};
-	assert((Tensor *) empty_tensor);
+	static const unsigned char empty_tensor[sizeof (Mat)] = {0};
+	assert((Mat *) empty_tensor);
 	if (tape->used > 0
-		&& memcmp(tape->tensors, empty_tensor, sizeof empty_tensor) != 0)
+		&& memcmp(tape->mats, empty_tensor, sizeof empty_tensor) != 0)
 		return false;
 
 	// The tape must be composed of valid tensors topologically sorted.
 	for (unsigned i = 0; i < tape->used; i++) {
-		Tensor *t = tape->tensors + i;
-		if (!Tensor_invariant(t)) return false;
+		Mat *t = tape->mats + i;
+		if (!Mat_invariant(t)) return false;
 		if (t->arg0 > i) return false;
 		if (Operation_IS_BINARY(t->op) && t->arg1 > i) return false;
 		// TODO: determine if it is fine that a parent is an empty tensor
@@ -221,9 +221,9 @@ WengertList_invariant(const WengertList *tape) {
 }
 
 static void
-WengertList_append(WengertList tape[static 1], const Tensor t) {
+WengertList_append(WengertList tape[static 1], const Mat t) {
 	assert(WengertList_invariant(tape));
-	tape->tensors[tape->used++] = t;
+	tape->mats[tape->used++] = t;
 	assert(WengertList_invariant(tape));
 }
 
@@ -235,9 +235,9 @@ WengertList_reset(WengertList tape[static 1]) {
 }
 
 static bool
-Tensor_same_shape(const Tensor a[static 1], const Tensor b[static 1]) {
-	assert(Tensor_invariant(a));
-	assert(Tensor_invariant(b));
+Mat_same_shape(const Mat a[static 1], const Mat b[static 1]) {
+	assert(Mat_invariant(a));
+	assert(Mat_invariant(b));
 	return a->rows == b->rows && a->cols == b->cols;
 }
 
@@ -255,7 +255,7 @@ sigmoid(float x) {
 // It would be better to accumulate errors "off-band" with a linked list.
 
 static unsigned
-Tensor_new(
+Mat_new(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	float value,
@@ -272,7 +272,7 @@ Tensor_new(
 	cblas_scopy(numel, (float[]){value}, 0, data,                1);
 	cblas_scopy(numel, (float[]){0},     0, data+numel, 1);
 
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = rows, .cols = cols,
 		.op = Operation_nop, .arg0 = 0, .arg1 = 0,
@@ -283,7 +283,7 @@ Tensor_new(
 }
 
 static unsigned
-Tensor_sum(
+Mat_sum(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	unsigned x
@@ -295,17 +295,17 @@ Tensor_sum(
 		return 0;
 	}
 
-	Tensor *x_tensor = tape->tensors + x;
+	Mat *x_tensor = tape->mats + x;
 
 	unsigned numel = 1;
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
 
-	*data = cblas_sdot(x_tensor->rows*x_tensor->cols,  (float[]){1}, 0, x_tensor->value, 1);
+	*data = cblas_sdot(x_tensor->rows*x_tensor->cols, (float[]){1}, 0, x_tensor->value, 1);
 	*(data+numel) = 0;
 	// cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = 1, .cols = 1,
 		.op = Operation_sum, .arg0 = x, .arg1 = 0,
@@ -316,7 +316,7 @@ Tensor_sum(
 }
 
 static unsigned
-Tensor_sigmoid(
+Mat_sigmoid(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	unsigned x
@@ -328,7 +328,7 @@ Tensor_sigmoid(
 		return 0;
 	}
 
-	Tensor *x_tensor = tape->tensors + x;
+	Mat *x_tensor = tape->mats + x;
 
 	unsigned numel = x_tensor->rows*x_tensor->cols;
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
@@ -339,7 +339,7 @@ Tensor_sigmoid(
 	}
 	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = x_tensor->rows, .cols = x_tensor->cols,
 		.op = Operation_sig, .arg0 = x, .arg1 = 0,
@@ -350,7 +350,7 @@ Tensor_sigmoid(
 }
 
 static unsigned
-Tensor_negate(
+Mat_negate(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	unsigned x
@@ -362,7 +362,7 @@ Tensor_negate(
 		return 0;
 	}
 
-	Tensor *x_tensor = tape->tensors + x;
+	Mat *x_tensor = tape->mats + x;
 
 	unsigned numel = x_tensor->rows*x_tensor->cols;
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
@@ -373,7 +373,7 @@ Tensor_negate(
 	}
 	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = x_tensor->rows, .cols = x_tensor->cols,
 		.op = Operation_neg, .arg0 = x, .arg1 = 0,
@@ -385,7 +385,7 @@ Tensor_negate(
 
 // TODO: broadcast semantic
 static unsigned
-Tensor_add(
+Mat_add(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	unsigned lhs,
@@ -398,9 +398,9 @@ Tensor_add(
 		return 0;
 	}
 	
-	Tensor *lhs_tensor = tape->tensors + lhs;
-	Tensor *rhs_tensor = tape->tensors + rhs;
-	if (!Tensor_same_shape(lhs_tensor, rhs_tensor)) {
+	Mat *lhs_tensor = tape->mats + lhs;
+	Mat *rhs_tensor = tape->mats + rhs;
+	if (!Mat_same_shape(lhs_tensor, rhs_tensor)) {
 		return 0;
 	}
 	
@@ -415,7 +415,7 @@ Tensor_add(
 	}
 	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 	
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = lhs_tensor->rows, .cols = lhs_tensor->cols,
 		.op = Operation_add,
@@ -428,7 +428,7 @@ Tensor_add(
 
 // TODO: broadcast semantic
 static unsigned
-Tensor_mul(
+Mat_mul(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	unsigned lhs,
@@ -441,9 +441,9 @@ Tensor_mul(
 		return 0;
 	}
 
-	Tensor *lhs_tensor = tape->tensors + lhs;
-	Tensor *rhs_tensor = tape->tensors + rhs;
-	if (!Tensor_same_shape(lhs_tensor, rhs_tensor)) {
+	Mat *lhs_tensor = tape->mats + lhs;
+	Mat *rhs_tensor = tape->mats + rhs;
+	if (!Mat_same_shape(lhs_tensor, rhs_tensor)) {
 		return 0;
 	}
 
@@ -458,7 +458,7 @@ Tensor_mul(
 	}
 	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = lhs_tensor->rows, .cols = lhs_tensor->cols,
 		.op = Operation_mul, .arg0 = lhs, .arg1 = rhs,
@@ -469,7 +469,7 @@ Tensor_mul(
 }
 
 static unsigned
-Tensor_pow(
+Mat_pow(
 	Arena alloc[static 1],
 	WengertList tape[static 1],
 	unsigned lhs,
@@ -482,8 +482,8 @@ Tensor_pow(
 		return 0;
 	}
 
-	Tensor *lhs_tensor = tape->tensors + lhs;
-	Tensor *rhs_tensor = tape->tensors + rhs;
+	Mat *lhs_tensor = tape->mats + lhs;
+	Mat *rhs_tensor = tape->mats + rhs;
 	if (rhs_tensor->rows*rhs_tensor->cols != 1) {
 		return 0;
 	}
@@ -497,7 +497,7 @@ Tensor_pow(
 	}
 	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = lhs_tensor->rows, .cols = lhs_tensor->cols,
 		.op = Operation_pow, .arg0 = lhs, .arg1 = rhs,
@@ -508,7 +508,7 @@ Tensor_pow(
 }
 
 static unsigned
-Tensor_matmul(Arena alloc[static 1],
+Mat_matmul(Arena alloc[static 1],
 			  WengertList tape[static 1],
 			  unsigned lhs,
 			  unsigned rhs) {
@@ -519,8 +519,8 @@ Tensor_matmul(Arena alloc[static 1],
 		return 0;
 	}
 
-	Tensor *lhs_tensor = tape->tensors + lhs;
-	Tensor *rhs_tensor = tape->tensors + rhs;
+	Mat *lhs_tensor = tape->mats + lhs;
+	Mat *rhs_tensor = tape->mats + rhs;
 	if (lhs_tensor->cols != rhs_tensor->rows) {
 		return 0;
 	}
@@ -539,7 +539,7 @@ Tensor_matmul(Arena alloc[static 1],
 				beta, data, rhs_cols);
 	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
 
-	Tensor t = {
+	Mat t = {
 		.value = data, .grad = data + numel,
 		.rows = lhs_rows, .cols = rhs_cols,
 		.op = Operation_dot, .arg0 = lhs, .arg1 = rhs,
@@ -555,10 +555,10 @@ Tensor_matmul(Arena alloc[static 1],
 // TIME TO SLAY THE DRAGON!
 
 static void
-Tensor_backprop(WengertList tape[static 1]) {
+Mat_backprop(WengertList tape[static 1]) {
 	assert(WengertList_invariant(tape));
 	if (tape->used == 0) return;
-	Tensor *starting_point = tape->tensors + (tape->used-1);
+	Mat *starting_point = tape->mats + (tape->used-1);
 	assert(starting_point->rows == 1 && starting_point->cols == 1);
 
 	/* Here we accumulate (saxpy) the gradient (vector-Jacobian product) in the
@@ -575,9 +575,9 @@ Tensor_backprop(WengertList tape[static 1]) {
 	 */
 	*starting_point->grad = 1;
 	for (unsigned i = tape->used; i-- > 0;) {
-		Tensor *t = tape->tensors + i;
-		Tensor *arg0 = tape->tensors + t->arg0;
-		Tensor *arg1 = tape->tensors + t->arg1;
+		Mat *t = tape->mats + i;
+		Mat *arg0 = tape->mats + t->arg0;
+		Mat *arg1 = tape->mats + t->arg1;
 		switch (t->op) {
 			case Operation_nop:
 				break;
@@ -710,32 +710,34 @@ void test_linear_layer_and_mse_loss(
 		return 1;
 	}
 
-	WengertList *tape = &WengerList_FROM_ARRAY((Tensor [1 << 7]){0});
+	WengertList *tape = &WengerList_FROM_ARRAY((Mat [1 << 7]){0});
 	tape->used++; // To create the empty tensor.
 
 	// sum((sigmoid(W@X + B) - Y)^2)
-	unsigned W = Tensor_new(alloc, tape, 1, 3, 3);
-	unsigned X = Tensor_new(alloc, tape, 2, 3, 2);
-	unsigned B = Tensor_new(alloc, tape, 3, 3, 2);
-	unsigned Y = Tensor_new(alloc, tape, 4, 3, 2);
-	unsigned TWO = Tensor_new(alloc, tape, 2, 1, 1);
+	unsigned W = Mat_new(alloc, tape, 1, 3, 3);
+	unsigned X = Mat_new(alloc, tape, 2, 3, 2);
+	unsigned B = Mat_new(alloc, tape, 3, 3, 2);
+	unsigned Y = Mat_new(alloc, tape, 4, 3, 2);
+	unsigned TWO = Mat_new(alloc, tape, 2, 1, 1);
 
-	unsigned linear = Tensor_sigmoid(alloc, tape,
-		Tensor_add(alloc, tape, Tensor_matmul(alloc, tape, W, X), B));
+	unsigned linear = Mat_sigmoid(alloc, tape,
+		Mat_add(alloc, tape, Mat_matmul(alloc, tape, W, X), B));
 
-	unsigned L = Tensor_sum(alloc, tape, Tensor_pow(alloc, tape,
-		Tensor_add(alloc, tape, linear, Tensor_negate(alloc, tape, Y)), TWO));
+	unsigned L = Mat_sum(alloc, tape, Mat_pow(alloc, tape,
+		Mat_add(alloc, tape, linear, Mat_negate(alloc, tape, Y)), TWO));
 
 	assert(L != 0);
-	Tensor_backprop(tape);
+	Mat_backprop(tape);
 
 	int INCY = 1, INCX = 1;
-	cblas_scopy(3*3, tape->tensors[W].grad, INCX, Wgrad, INCY);
-	cblas_scopy(3*2, tape->tensors[X].grad, INCX, Xgrad, INCY);
-	cblas_scopy(3*2, tape->tensors[B].grad, INCX, Bgrad, INCY);
-	cblas_scopy(3*2, tape->tensors[Y].grad, INCX, Ygrad, INCY);
-	cblas_scopy(1*1, tape->tensors[TWO].grad, INCX, TWOgrad, INCY);
+	cblas_scopy(3*3, tape->mats[W].grad, INCX, Wgrad, INCY);
+	cblas_scopy(3*2, tape->mats[X].grad, INCX, Xgrad, INCY);
+	cblas_scopy(3*2, tape->mats[B].grad, INCX, Bgrad, INCY);
+	cblas_scopy(3*2, tape->mats[Y].grad, INCX, Ygrad, INCY);
+	cblas_scopy(1*1, tape->mats[TWO].grad, INCX, TWOgrad, INCY);
 }
+
+// TODO: support req_grad=False, also we need to propagrate this property iff all args to an operator are req_grad=False
 
 #ifdef TEST
 
@@ -753,7 +755,7 @@ int main(void) {
 		return 1;
 	}
 	
-	WengertList *tape = &WengerList_FROM_ARRAY((Tensor [1 << 7]){0});
+	WengertList *tape = &WengerList_FROM_ARRAY((Mat [1 << 7]){0});
 	tape->used++; // To create the empty tensor.
 
 	/* A = torch.ones(3, 2, requires_grad=True)
@@ -768,18 +770,18 @@ int main(void) {
 	 *         [0.0049, 0.0049]])
 	 */
 
-	unsigned A = Tensor_new(alloc, tape, 1, 3, 2);
-	unsigned x = Tensor_new(alloc, tape, 2, 2, 1);
-	unsigned b = Tensor_new(alloc, tape, 2, 3, 1);
+	unsigned A = Mat_new(alloc, tape, 1, 3, 2);
+	unsigned x = Mat_new(alloc, tape, 2, 2, 1);
+	unsigned b = Mat_new(alloc, tape, 2, 3, 1);
 
 	// y = Ax + b
-	unsigned y = Tensor_add(alloc, tape, Tensor_matmul(alloc, tape, A, x), b);
-	unsigned L = Tensor_sum(alloc, tape, Tensor_sigmoid(alloc, tape, y));
+	unsigned y = Mat_add(alloc, tape, Mat_matmul(alloc, tape, A, x), b);
+	unsigned L = Mat_sum(alloc, tape, Mat_sigmoid(alloc, tape, y));
 
 	assert(L != 0);
-	Tensor_backprop(tape);
+	Mat_backprop(tape);
 
-	cblas_sprint(CblasRowMajor, CblasNoTrans, 3, 2, tape->tensors[A].grad, tape->tensors[A].cols);
+	cblas_sprint(CblasRowMajor, CblasNoTrans, 3, 2, tape->mats[A].grad, tape->mats[A].cols);
 
 	// TODO: test back propagation trough negation, Hadamard product and power.
 	// TODO: how do I tell my ligrary to backpropagate only in the weights?
