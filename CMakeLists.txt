@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.12)
 project(Thesis)
 
-add_executable(minigrad "minigrad.c")
+add_executable(minigrad "minigrad.c" "blas.c")
+target_compile_definitions(minigrad PUBLIC "TEST_minigrad")
 target_link_libraries(minigrad "-framework Accelerate")
-target_compile_definitions(minigrad PUBLIC "TEST")
 
 add_executable(blas "blas.c")
+target_compile_definitions(blas PUBLIC "TEST_blas")
 target_link_libraries(blas "-framework Accelerate")
 
 add_executable(dbml "dbml.c")

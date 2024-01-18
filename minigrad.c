@@ -4,98 +4,11 @@
 
 #pragma mark BLAS (Basic Linear Algebra Subroutine)
 
-// https://www.netlib.org/blas/
-// https://developer.apple.com/documentation/accelerate/blas?language=objc
-// https://www.gnu.org/software/gsl/doc/html/blas.html
-// https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2023-2/blas-functionality.html
-
-// Good LDA explenations:
-//   * https://www.cse-lab.ethz.ch/wp-content/uploads/2020/10/Linear-Algebra-BLAS-ISA-Pipelining.pdf
-//   * https://stackoverflow.com/a/37891808
-//   * https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2024-0/cblas-gemm-001.html
-// Honestly Intel has the best BLAS documentation.
-
-#define ACCELERATE_NEW_LAPACK
-#define ACCELERATE_LAPACK_ILP64
-#include <Accelerate/Accelerate.h>
+#define ACCELERATE_NEW_LAPACK 1
+#define ACCELERATE_LAPACK_ILP64 1
+#include "blas.h"
 #undef ACCELERATE_NEW_LAPACK
 #undef ACCELERATE_LAPACK_ILP64
-
-#define LEFT_SQUARE_BRACKET               "["
-#define RIGHT_SQUARE_BRACKET              "]"
-#define LEFT_SQUARE_BRACKET_UPPER_CORNER  "\u23A1"
-#define LEFT_SQUARE_BRACKET_EXTENSION     "\u23A2"
-#define LEFT_SQUARE_BRACKET_LOWER_CORNER  "\u23A3"
-#define RIGHT_SQUARE_BRACKET_UPPER_CORNER "\u23A4"
-#define RIGHT_SQUARE_BRACKET_EXTENSION    "\u23A5"
-#define RIGHT_SQUARE_BRACKET_LOWER_CORNER "\u23A6"
-
-// NOTE: should we return some error from printf?
-void cblas_sprint(const enum CBLAS_ORDER ORDER,
-				  const enum CBLAS_TRANSPOSE TRANS,
-				  const __LAPACK_int M,
-				  const __LAPACK_int N,
-				  const float *A,
-				  const __LAPACK_int LD) {
-	char rout[sizeof __func__] = {0};
-	if ((ORDER != CblasRowMajor) & (ORDER != CblasColMajor)) {
-		cblas_xerbla(1, strncpy(rout, __func__, sizeof rout),
-					 "illegal ORDER setting: %d", ORDER);
-	}
-	if (ORDER != CblasRowMajor) {
-		cblas_xerbla(1, strncpy(rout, __func__, sizeof rout),
-					 "row-major is the only supported order for now");
-	}
-	if ((TRANS != CblasNoTrans) & (TRANS != CblasTrans)) {
-		cblas_xerbla(2, strncpy(rout, __func__, sizeof rout),
-					 "illegal TRANS setting: %d", TRANS);
-	}
-	if (TRANS != CblasNoTrans) {
-		cblas_xerbla(2, strncpy(rout, __func__, sizeof rout),
-					 "transposition is not supported for now");
-	}
-	if (M < 1) {
-		cblas_xerbla(3, strncpy(rout, __func__, sizeof rout),
-					 "the number of rows M=%d shoud be >= 1", M);
-	}
-	if (N < 1) {
-		cblas_xerbla(4, strncpy(rout, __func__, sizeof rout),
-					 "the number of columns N=%d shoud be >= 1", N);
-	}
-	if (!A) {
-		cblas_xerbla(5, strncpy(rout, __func__, sizeof rout),
-					 "the pointer to the matrix should not be null");
-	}
-	// TODO: check if given the number of rows LD fits in MxN
-	if (LD != N) {
-		cblas_xerbla(6, strncpy(rout, __func__, sizeof rout),
-					 "leading dimension not supported for now");
-	}
-	// TODO: add support for CBLAS_ORDER, CBLAS_TRANSPOSE, LD
-	// TODO: check that M*N fits in an int (M <= INT_MAX/N)
-	// NOTE: does BLAS handles empty matrices?
-	// TODO: do something smart for number formatting or accept format as an argument.
-
-	for (int i = 0; i < M; i++) {
-		char *open_square_bracket =
-			(M == 1) ? LEFT_SQUARE_BRACKET
-			: (i == 0) ? LEFT_SQUARE_BRACKET_UPPER_CORNER
-			: (i < M-1) ? LEFT_SQUARE_BRACKET_EXTENSION
-			: LEFT_SQUARE_BRACKET_LOWER_CORNER;
-		printf("%s", open_square_bracket);
-		int j = 0;
-		for (; j < N-1; j++) {
-			printf("%6.5f ", A[i*LD + j]);
-		}
-		char *close_square_bracket =
-			(M == 1) ? RIGHT_SQUARE_BRACKET
-			: (i == 0) ? RIGHT_SQUARE_BRACKET_UPPER_CORNER
-			: (i < M-1) ? RIGHT_SQUARE_BRACKET_EXTENSION
-			: RIGHT_SQUARE_BRACKET_LOWER_CORNER;
-		assert(j == N-1);
-		printf("%6.5f%s\n", A[i*LD + j], close_square_bracket);
-	}
-}
 
 #pragma mark Metal
 
@@ -739,7 +652,7 @@ void test_linear_layer_and_mse_loss(
 
 // TODO: support req_grad=False, also we need to propagrate this property iff all args to an operator are req_grad=False
 
-#ifdef TEST
+#ifdef TEST_minigrad
 
 #include <stdlib.h>
 #include <stdio.h>

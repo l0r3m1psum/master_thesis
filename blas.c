@@ -1,8 +1,8 @@
 // cc blas.c -framework Accelerate
 
-#define ACCELERATE_NEW_LAPACK
-#define ACCELERATE_LAPACK_ILP64
-#include <Accelerate/Accelerate.h>
+#define ACCELERATE_NEW_LAPACK 1
+#define ACCELERATE_LAPACK_ILP64 1
+#include "blas.h"
 #undef ACCELERATE_NEW_LAPACK
 #undef ACCELERATE_LAPACK_ILP64
 
@@ -15,22 +15,12 @@
 #define RIGHT_SQUARE_BRACKET_EXTENSION    "\u23A5"
 #define RIGHT_SQUARE_BRACKET_LOWER_CORNER "\u23A6"
 
-// https://www.netlib.org/blas/
-// https://developer.apple.com/documentation/accelerate/blas?language=objc
-// https://www.gnu.org/software/gsl/doc/html/blas.html
-// https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2023-2/blas-functionality.html
-
-// Good LDA explenations:
-//   * https://www.cse-lab.ethz.ch/wp-content/uploads/2020/10/Linear-Algebra-BLAS-ISA-Pipelining.pdf
-//   * https://stackoverflow.com/a/37891808
-
-// NOTE: should we return some error from printf?
 void cblas_sprint(const enum CBLAS_ORDER ORDER,
 				  const enum CBLAS_TRANSPOSE TRANS,
-				  const __LAPACK_int M,
-				  const __LAPACK_int N,
+				  const long M,
+				  const long N,
 				  const float *A,
-				  const __LAPACK_int LD) {
+				  const long LD) {
 	char rout[sizeof __func__] = {0};
 	if ((ORDER != CblasRowMajor) & (ORDER != CblasColMajor)) {
 		cblas_xerbla(1, strncpy(rout, __func__, sizeof rout),
@@ -48,13 +38,25 @@ void cblas_sprint(const enum CBLAS_ORDER ORDER,
 		cblas_xerbla(2, strncpy(rout, __func__, sizeof rout),
 					 "transposition is not supported for now");
 	}
-	if (M < 1) {
+	if (M < 0) {
 		cblas_xerbla(3, strncpy(rout, __func__, sizeof rout),
-					 "the number of rows M=%d shoud be >= 1", M);
+					 "the number of rows M=%l shoud be >= 1", M);
 	}
-	if (N < 1) {
+	if (N == 0 && M != 0) {
+		cblas_xerbla(3, strncpy(rout, __func__, sizeof rout),
+					 "M=%l should be 0 since N=0", M);
+	}
+	if (N < 0) {
 		cblas_xerbla(4, strncpy(rout, __func__, sizeof rout),
-					 "the number of columns N=%d shoud be >= 1", N);
+					 "the number of columns N=%l shoud be >= 1", N);
+	}
+	if (M == 0 && N != 0) {
+		cblas_xerbla(4, strncpy(rout, __func__, sizeof rout),
+					 "N=%l should be 0 since M=0", N);
+	}
+	if (M > LONG_MAX/(N == 0 ? 1 : N)) {
+		cblas_xerbla(4, strncpy(rout, __func__, sizeof rout),
+					 "M=%l*N=%l is bigger than LONG_MAX", M, N);
 	}
 	if (!A) {
 		cblas_xerbla(5, strncpy(rout, __func__, sizeof rout),
@@ -66,9 +68,15 @@ void cblas_sprint(const enum CBLAS_ORDER ORDER,
 					 "leading dimension not supported for now");
 	}
 	// TODO: add support for CBLAS_ORDER, CBLAS_TRANSPOSE, LD
-	// TODO: check that M*N fits in an int (M <= INT_MAX/N)
-	// NOTE: does BLAS handles empty matrices?
-	
+	// TODO: do something smart for number formatting or accept format as an argument.
+
+	// If printf fails we don't report any error since first blas does not have
+	// a standard API to communicate this kinds of events and second this is a
+	// best effort function.
+	if (M == 0) {
+		printf(LEFT_SQUARE_BRACKET RIGHT_SQUARE_BRACKET "\n");
+		return;
+	}
 	for (int i = 0; i < M; i++) {
 		char *open_square_bracket =
 			(M == 1) ? LEFT_SQUARE_BRACKET
@@ -78,17 +86,19 @@ void cblas_sprint(const enum CBLAS_ORDER ORDER,
 		printf("%s", open_square_bracket);
 		int j = 0;
 		for (; j < N-1; j++) {
-			printf("%6.2f, ", A[i*LD + j]);
+			printf("%6.5f ", A[i*LD + j]);
 		}
 		char *close_square_bracket =
 			(M == 1) ? RIGHT_SQUARE_BRACKET
 			: (i == 0) ? RIGHT_SQUARE_BRACKET_UPPER_CORNER
 			: (i < M-1) ? RIGHT_SQUARE_BRACKET_EXTENSION
 			: RIGHT_SQUARE_BRACKET_LOWER_CORNER;
-		printf("%6.2f%s\n", A[i*N + N-1], close_square_bracket);
+		assert(j == N-1);
+		printf("%6.5f%s\n", A[i*LD + j], close_square_bracket);
 	}
 }
 
+#ifdef TEST_blas
 int main(void) {
 	enum CBLAS_ORDER ORDER = CblasRowMajor;
 	enum CBLAS_TRANSPOSE TRANSA = CblasNoTrans, TRANSB = CblasNoTrans;
@@ -181,7 +191,17 @@ int main(void) {
 		cblas_sscal(N, SA, SX, INCX);
 		cblas_sprint(ORDER, TRANSA, N, 1, SX, 1);
 	}
-	
+
+	{
+		__LAPACK_int N = 0;
+		float SA = 4;
+		float SX[] = (float[]){1,1,1,1};
+		__LAPACK_int INCX = 1;
+		cblas_sscal(N, SA, SX, INCX);
+		cblas_sprint(ORDER, TRANSA, N, 0, SX, 0);
+	}
+
 	// cblas_sswap, cblas_sdot, cblas_sdsdot, cblas_snrm2, cblas_sasum, cblas_isamax, cblas_sgemv;
 	return 0;
 }
+#endif
