@@ -69,6 +69,9 @@ void cblas_sprint(const enum CBLAS_ORDER ORDER,
 	}
 	// TODO: add support for CBLAS_ORDER, CBLAS_TRANSPOSE, LD
 	// TODO: do something smart for number formatting or accept format as an argument.
+	// By something smart I mean deciding a satisfactory precision to print all
+	// the elements in the matrix (I wonder how numpy does it...)
+	// https://www.ryanjuckett.com/printing-floating-point-numbers/
 
 	// If printf fails we don't report any error since first blas does not have
 	// a standard API to communicate this kinds of events and second this is a
@@ -77,14 +80,14 @@ void cblas_sprint(const enum CBLAS_ORDER ORDER,
 		printf(LEFT_SQUARE_BRACKET RIGHT_SQUARE_BRACKET "\n");
 		return;
 	}
-	for (int i = 0; i < M; i++) {
+	for (long i = 0; i < M; i++) {
 		char *open_square_bracket =
 			(M == 1) ? LEFT_SQUARE_BRACKET
 			: (i == 0) ? LEFT_SQUARE_BRACKET_UPPER_CORNER
 			: (i < M-1) ? LEFT_SQUARE_BRACKET_EXTENSION
 			: LEFT_SQUARE_BRACKET_LOWER_CORNER;
 		printf("%s", open_square_bracket);
-		int j = 0;
+		long j = 0;
 		for (; j < N-1; j++) {
 			printf("%6.5f ", A[i*LD + j]);
 		}
