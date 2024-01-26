@@ -462,14 +462,17 @@ Mat_matmul(
 	return tape->used - 1;
 }
 
-// TODO: this should take a unsigned as an argument (i.e. the matrix (scalar) in
-// the tape from where the back-prop should start.)
-static void
-Mat_backprop(WengertList tape[static 1]) {
+static bool
+Mat_backprop(unsigned l) {
 	assert(WengertList_invariant(tape));
-	if (tape->used == 0) return;
+
+	if (l >= tape->used) {
+		return false;
+	}
 	Mat *starting_point = tape->mats + (tape->used-1);
-	assert(starting_point->rows == 1 && starting_point->cols == 1);
+	if (Mat_numel(starting_point) != 1) {
+		return false;
+	}
 
 	/* Here we accumulate (saxpy) the gradient (vector-Jacobian product) in the
 	 * parents of the various operators. The important thing is accumulating the
@@ -484,7 +487,7 @@ Mat_backprop(WengertList tape[static 1]) {
 	 *
 	 */
 	*starting_point->grad = 1;
-	for (unsigned i = tape->used; i-- > 0;) {
+	for (unsigned i = l+1; i-- > 0;) {
 		Mat *t = tape->mats + i;
 		Mat *arg0 = tape->mats + t->arg0;
 		Mat *arg1 = tape->mats + t->arg1;
@@ -604,6 +607,8 @@ Mat_backprop(WengertList tape[static 1]) {
 			} break;
 		}
 	}
+
+	return true;
 }
 
 void test_linear_layer_and_mse_loss(
@@ -637,7 +642,7 @@ void test_linear_layer_and_mse_loss(
 	unsigned L = Mat_sum(Mat_pow(Mat_add(linear, Mat_negate(Y)), TWO));
 
 	assert(L != 0);
-	Mat_backprop(tape);
+	Mat_backprop(L);
 
 	int INCY = 1, INCX = 1;
 	cblas_scopy(3*3, tape->mats[W].grad, INCX, Wgrad, INCY);
@@ -691,7 +696,7 @@ int main(void) {
 	unsigned L = Mat_sum(Mat_sigmoid(y));
 
 	assert(L != 0);
-	Mat_backprop(tape);
+	Mat_backprop(L);
 
 	cblas_sprint(CblasRowMajor, CblasNoTrans, 3, 2, tape->mats[A].grad, tape->mats[A].cols);
 
