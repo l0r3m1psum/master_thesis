@@ -165,6 +165,10 @@ sigmoid(float x) {
 	return 1.f/(1.f+expf(-x));
 }
 
+// This is the global context.
+Arena *alloc;
+WengertList *tape;
+
 #include <stdint.h>
 #include <limits.h>
 
@@ -173,17 +177,19 @@ sigmoid(float x) {
 // typedef struct ExpectedError {unsigned id; Error code;} ExpectedError;
 // It would be better to accumulate errors "off-band" with a linked list.
 
+typedef struct Size {
+	unsigned rows, cols;
+} MSize;
+
 static unsigned
 Mat_new(
-	Arena alloc[static 1],
-	WengertList tape[static 1],
 	float value,
-	unsigned rows,
-	unsigned cols
+	MSize size
 ) {
 	assert(Arena_invariant(alloc));
 	assert(WengertList_invariant(tape));
-	
+	unsigned rows = size.rows, cols = size.cols;
+
 	unsigned numel = rows*cols;
 	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
 	if (!data) return 0;
@@ -203,8 +209,6 @@ Mat_new(
 
 static unsigned
 Mat_sum(
-	Arena alloc[static 1],
-	WengertList tape[static 1],
 	unsigned x
 ) {
 	assert(Arena_invariant(alloc));
@@ -236,8 +240,6 @@ Mat_sum(
 
 static unsigned
 Mat_sigmoid(
-	Arena alloc[static 1],
-	WengertList tape[static 1],
 	unsigned x
 ) {
 	assert(Arena_invariant(alloc));
@@ -270,8 +272,6 @@ Mat_sigmoid(
 
 static unsigned
 Mat_negate(
-	Arena alloc[static 1],
-	WengertList tape[static 1],
 	unsigned x
 ) {
 	assert(Arena_invariant(alloc));
@@ -305,8 +305,6 @@ Mat_negate(
 // TODO: broadcast semantic
 static unsigned
 Mat_add(
-	Arena alloc[static 1],
-	WengertList tape[static 1],
 	unsigned lhs,
 	unsigned rhs
 ) {
@@ -348,8 +346,6 @@ Mat_add(
 // TODO: broadcast semantic
 static unsigned
 Mat_mul(
-	Arena alloc[static 1],
-	WengertList tape[static 1],
 	unsigned lhs,
 	unsigned rhs
 ) {
@@ -389,8 +385,6 @@ Mat_mul(
 
 static unsigned
 Mat_pow(
-	Arena alloc[static 1],
-	WengertList tape[static 1],
 	unsigned lhs,
 	unsigned rhs
 ) {
@@ -427,10 +421,10 @@ Mat_pow(
 }
 
 static unsigned
-Mat_matmul(Arena alloc[static 1],
-			  WengertList tape[static 1],
-			  unsigned lhs,
-			  unsigned rhs) {
+Mat_matmul(
+	unsigned lhs,
+	unsigned rhs
+) {
 	assert(Arena_invariant(alloc));
 	assert(WengertList_invariant(tape));
 	
@@ -468,6 +462,8 @@ Mat_matmul(Arena alloc[static 1],
 	return tape->used - 1;
 }
 
+// TODO: this should take a unsigned as an argument (i.e. the matrix (scalar) in
+// the tape from where the back-prop should start.)
 static void
 Mat_backprop(WengertList tape[static 1]) {
 	assert(WengertList_invariant(tape));
@@ -613,7 +609,8 @@ Mat_backprop(WengertList tape[static 1]) {
 void test_linear_layer_and_mse_loss(
 	float *Wgrad, float *Xgrad, float *Bgrad, float *Ygrad, float *TWOgrad
 ) {
-	Arena *alloc = &(Arena){
+	// FIXME: this is stack allocated too...
+	alloc = &(Arena){
 		.data = calloc(4 * (1 << 10), 1),
 		.size = 4 * (1 << 10),
 		.used = 0,
@@ -623,21 +620,21 @@ void test_linear_layer_and_mse_loss(
 		return 1;
 	}
 
-	WengertList *tape = &WengerList_FROM_ARRAY((Mat [1 << 7]){0});
+	// FIXME: this makes the global tape point to stack memory that will not be
+	// valid after this function terminate!
+	tape = &WengerList_FROM_ARRAY((Mat [1 << 7]){0});
 	tape->used++; // To create the empty tensor.
 
 	// sum((sigmoid(W@X + B) - Y)^2)
-	unsigned W = Mat_new(alloc, tape, 1, 3, 3);
-	unsigned X = Mat_new(alloc, tape, 2, 3, 2);
-	unsigned B = Mat_new(alloc, tape, 3, 3, 2);
-	unsigned Y = Mat_new(alloc, tape, 4, 3, 2);
-	unsigned TWO = Mat_new(alloc, tape, 2, 1, 1);
+	unsigned W = Mat_new(1, (MSize){3, 3});
+	unsigned X = Mat_new(2, (MSize){3, 2});
+	unsigned B = Mat_new(3, (MSize){3, 2});
+	unsigned Y = Mat_new(4, (MSize){3, 2});
+	unsigned TWO = Mat_new(2, (MSize){1, 1});
 
-	unsigned linear = Mat_sigmoid(alloc, tape,
-		Mat_add(alloc, tape, Mat_matmul(alloc, tape, W, X), B));
+	unsigned linear = Mat_sigmoid(Mat_add(Mat_matmul(W, X), B));
 
-	unsigned L = Mat_sum(alloc, tape, Mat_pow(alloc, tape,
-		Mat_add(alloc, tape, linear, Mat_negate(alloc, tape, Y)), TWO));
+	unsigned L = Mat_sum(Mat_pow(Mat_add(linear, Mat_negate(Y)), TWO));
 
 	assert(L != 0);
 	Mat_backprop(tape);
@@ -658,7 +655,8 @@ void test_linear_layer_and_mse_loss(
 #include <stdio.h>
 
 int main(void) {
-	Arena *alloc = &(Arena){
+	// FIXME: stack allocated.
+	alloc = &(Arena){
 		.data = calloc(4 * (1 << 10), 1),
 		.size = 4 * (1 << 10),
 		.used = 0,
@@ -668,7 +666,8 @@ int main(void) {
 		return 1;
 	}
 	
-	WengertList *tape = &WengerList_FROM_ARRAY((Mat [1 << 7]){0});
+	// FIXME: stack allocated.
+	tape = &WengerList_FROM_ARRAY((Mat [1 << 7]){0});
 	tape->used++; // To create the empty tensor.
 
 	/* A = torch.ones(3, 2, requires_grad=True)
@@ -683,23 +682,64 @@ int main(void) {
 	 *         [0.0049, 0.0049]])
 	 */
 
-	unsigned A = Mat_new(alloc, tape, 1, 3, 2);
-	unsigned x = Mat_new(alloc, tape, 2, 2, 1);
-	unsigned b = Mat_new(alloc, tape, 2, 3, 1);
+	unsigned A = Mat_new(1, (MSize){3, 2});
+	unsigned x = Mat_new(2, (MSize){2, 1});
+	unsigned b = Mat_new(2, (MSize){3, 1});
 
 	// y = Ax + b
-	unsigned y = Mat_add(alloc, tape, Mat_matmul(alloc, tape, A, x), b);
-	unsigned L = Mat_sum(alloc, tape, Mat_sigmoid(alloc, tape, y));
+	unsigned y = Mat_add(Mat_matmul(A, x), b);
+	unsigned L = Mat_sum(Mat_sigmoid(y));
 
 	assert(L != 0);
 	Mat_backprop(tape);
 
 	cblas_sprint(CblasRowMajor, CblasNoTrans, 3, 2, tape->mats[A].grad, tape->mats[A].cols);
 
-	// TODO: test back propagation trough negation, Hadamard product and power.
-	// TODO: how do I tell my ligrary to backpropagate only in the weights?
-	// The resilt that I get in x.grad are non sensical or is it fine???
+	// TODO: test back propagation trough Hadamard product.
 	return 0;
 }
 
+#endif
+
+#if 0
+Mat Mat_op(Mat lhs, Mat rhs) {
+	if (!Mat_same_shape(lhs, rhs)) {
+		return 0;
+	}
+
+	Mat res = Mat_empty(same, shape); // data, grad, rows, cols, op, arg0, arg1
+	// In mat_empty we should also record the reason for the error:
+	//   tape_oom, arena_oom
+	// Two errors are now implicit shape_mismatch and propagation. Propagation
+	// is fine if it is implicit... But shape missmatch is not.
+	for (uint i = 0; i < Mat_numel(res)) {
+		...
+	}
+
+	return res;
+}
+
+void f(void) {
+	// This is needed for the global context used for recording the execution
+	// and allocating memory.
+	Mat_init();
+
+	// We specify the shape and if we require the gradient to be calculated.
+	Mat a = Mat_new(3, 3, true), b = Mat_new(3, 1, true);
+	// initializing a and b...
+	Mat c = Mat_dot(a, b);
+	Mat l = Mat_sum(c);
+	bool arg_is_scalar = Mat_backward(l);
+	assert(arg_is_scalar);
+	Mat_grad(a); // returns a float pointer???
+
+	Mat_zero_grad(a); Mat_zero_grad(b);
+
+	// sets no_grad at the context level so that the next operations are not
+	// considered for back propagation.
+	Mat_no_grad();
+	// Remember that we have to build the graph once and then execute it
+	// multiple times! Therefore putting everything in a Wengert list is okay
+	// since we assume that every calculation is needed.
+}
 #endif
