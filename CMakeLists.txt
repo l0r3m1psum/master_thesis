@@ -14,15 +14,23 @@ target_link_libraries(blas "-framework Accelerate")
 add_executable(dbml "dbml.c")
 # add_test(NAME test COMMAND dbml)
 
-set_source_files_properties("kernels.metal" PROPERTIES LANGUAGE METAL)
+set_source_files_properties("kernels.metal" PROPERTIES
+	LANGUAGE METAL
+	COMPILE_FLAGS "-frecord-sources")
 add_executable(metal "metal.m" "kernels.metal" "metal_common.h")
-# FIXME: xcode does not like external symbols. How do I tell Cmake to generate
-# an Xcode project were it tels the metal compiler to include source information?
 add_custom_command(TARGET metal POST_BUILD
 	COMMAND xcrun ARGS -sdk macosx metal -frecord-sources=flat "${CMAKE_SOURCE_DIR}/kernels.metal"
 	BYPRODUCTS default.metallibsym)
 set_target_properties(metal PROPERTIES XCODE_SCHEME_ENVIRONMENT "MTL_CAPTURE_ENABLED=1")
 target_link_libraries(metal "-framework Metal" "-framework MetalPerformanceShaders")
+
+set_source_files_properties("minigrad_kernels.metal" PROPERTIES
+	LANGUAGE METAL
+	COMPILE_FLAGS "-frecord-sources -fno-fast-math")
+# in metal pow(x, y) = exp2(y * log2(x)) when -ffast-math is enabled (which it
+# is by default)  thi makes pow not work for negative x...
+add_executable(minigrad_GPU "minigrad_GPU.m" "minigrad_kernels.metal")
+target_link_libraries(minigrad_GPU "-framework Metal" "-framework CoreGraphics")
 
 add_custom_target(digest SOURCES digest.md)
 

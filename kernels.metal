@@ -246,9 +246,81 @@ sum_coarsed(
 	}
 }
 
-#pragma mark Random Number Generation
+// TODO: Create a good code skeleton for this kind of element wise functions.
+// Coarsening and vectorization I think are the things that should be done.
+// https://github.com/Liu-xiandong/How_to_optimize_in_GPU#1-elementwise
 
 #include <metal_math>
+
+[[kernel]] void
+sigmoid(
+	const device float *input  [[buffer(0)]],
+	      device float *output [[buffer(1)]],
+		constant uint&  Width  [[buffer(2)]],
+	ASSERT_SCAFFOLDING(3)
+) {
+	uint i = blockDim.x*blockIdx.x + threadIdx.x;
+	if (i < Width) {
+		output[i] = 1.f/(1.f+metal::exp(-input[i]));
+	}
+}
+
+[[kernel]] void
+negation(
+   const device float *input  [[buffer(0)]],
+		 device float *output [[buffer(1)]],
+	   constant uint&  Width  [[buffer(2)]],
+   ASSERT_SCAFFOLDING(3)
+) {
+	uint i = blockDim.x*blockIdx.x + threadIdx.x;
+	if (i < Width) {
+		output[i] = -input[i];
+	}
+}
+
+[[kernel]] void
+addition(
+	const device float *lhs    [[buffer(0)]],
+	const device float *rhs    [[buffer(1)]],
+		  device float *output [[buffer(2)]],
+		constant uint&  Width  [[buffer(3)]],
+	 ASSERT_SCAFFOLDING(4)
+ ) {
+	 uint i = blockDim.x*blockIdx.x + threadIdx.x;
+	 if (i < Width) {
+		 output[i] = lhs[i] + rhs[i];
+	 }
+ }
+
+[[kernel]] void
+multiplication(
+	const device float *lhs    [[buffer(0)]],
+	const device float *rhs    [[buffer(1)]],
+		  device float *output [[buffer(2)]],
+		constant uint&  Width  [[buffer(3)]],
+	 ASSERT_SCAFFOLDING(4)
+ ) {
+	 uint i = blockDim.x*blockIdx.x + threadIdx.x;
+	 if (i < Width) {
+		 output[i] = lhs[i] * rhs[i];
+	 }
+ }
+
+[[kernel]] void
+power(
+	const device float *lhs    [[buffer(0)]],
+	    constant float& rhs    [[buffer(1)]],
+		  device float *output [[buffer(2)]],
+		constant uint&  Width  [[buffer(3)]],
+	 ASSERT_SCAFFOLDING(4)
+ ) {
+	 uint i = blockDim.x*blockIdx.x + threadIdx.x;
+	 if (i < Width) {
+		 output[i] = metal::pow(lhs[i], rhs);
+	 }
+ }
+
+#pragma mark Random Number Generation
 
 // Taken from chapter 37 of GPU Gems 3
 // https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-37-efficient-random-number-generation-and-application

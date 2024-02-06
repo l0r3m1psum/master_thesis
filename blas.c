@@ -68,10 +68,11 @@ void cblas_sprint(const enum CBLAS_ORDER ORDER,
 					 "leading dimension not supported for now");
 	}
 	// TODO: add support for CBLAS_ORDER, CBLAS_TRANSPOSE, LD
-	// TODO: do something smart for number formatting or accept format as an argument.
+	// TODO: do something smart for number formatting or accept format as an argument (like numpy).
 	// By something smart I mean deciding a satisfactory precision to print all
 	// the elements in the matrix (I wonder how numpy does it...)
 	// https://www.ryanjuckett.com/printing-floating-point-numbers/
+	// https://numpy.org/doc/stable/reference/generated/numpy.array2string.html
 
 	// If printf fails we don't report any error since first blas does not have
 	// a standard API to communicate this kinds of events and second this is a

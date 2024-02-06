@@ -12,7 +12,7 @@
 
 #pragma mark Metal
 
-// TODO: put Metal API stuff here.
+#include <Metal/Metal.h>
 
 #pragma mark Memory Allocator
 
@@ -36,6 +36,7 @@ Arena_invariant(const Arena alloc[static 1]) {
 }
 
 // TODO: add allignment capabilities for Metal.
+#if 0
 static void *
 Arena_alloc(Arena alloc[static 1], size_t req_size) {
 	assert(Arena_invariant(alloc));
@@ -46,6 +47,32 @@ Arena_alloc(Arena alloc[static 1], size_t req_size) {
 	alloc->used += req_size;
 	return res;
 }
+#else
+static void *
+Arena_alloc(struct Arena arena[static 1], size_t size) {
+	assert(Arena_invariant(arena));
+	size_t allign = sizeof (void *)*4;
+	// Because metal wants it this way.
+	static_assert(sizeof (void *)*4 == 32, "wut?");
+
+	// NOTE: should I check for overflow here? Ideally the Arena should be
+	// initialized such that this can never happen.
+	uintptr_t res = (uintptr_t)arena->data + (uintptr_t)arena->used;
+	uintptr_t modulo = res % allign;
+	if (modulo != 0) {
+		res += allign - modulo;
+	}
+	assert(res%allign == 0);
+
+	if (res + size > (uintptr_t)(arena->data + arena->size)) {
+		return NULL;
+	}
+
+	// This takes into account also the displacement caused by allignment.
+	arena->used = res - (uintptr_t)arena->data + size;
+	return (void *) res;
+}
+#endif
 
 static void
 Arena_reset(Arena alloc[static 1]) {
@@ -168,6 +195,9 @@ sigmoid(float x) {
 // This is the global context.
 Arena *alloc;
 WengertList *tape;
+id<MTLCommandQueue> cmdQueue;
+enum {cpu, gpu} backend;
+id<MTLComputePipelineState> sumPSO, sigPSO, negPSO, addPSO, mulPSO, powPSO, dotPSO;
 
 #include <stdint.h>
 #include <limits.h>
@@ -191,14 +221,15 @@ Mat_new(
 	unsigned rows = size.rows, cols = size.cols;
 
 	unsigned numel = rows*cols;
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
-	cblas_scopy(numel, (float[]){value}, 0, data,                1);
-	cblas_scopy(numel, (float[]){0},     0, data+numel, 1);
+	cblas_scopy(numel, (float[]){value}, 0, data, 1);
+	cblas_scopy(numel, (float[]){0},     0, grad, 1);
 
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = rows, .cols = cols,
 		.op = Operation_nop, .arg0 = 0, .arg1 = 0,
 	};
@@ -221,15 +252,38 @@ Mat_sum(
 	Mat *x_tensor = tape->mats + x;
 
 	unsigned numel = 1;
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
-	*data = cblas_sdot(Mat_numel(x_tensor), (float[]){1}, 0, x_tensor->value, 1);
-	*(data+numel) = 0;
-	// cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
+	if (backend == cpu){
+		*data = cblas_sdot(Mat_numel(x_tensor), (float[]){1}, 0, x_tensor->value, 1);
+		cblas_scopy(numel, (float[]){0}, 0, grad, 1);
+	} else {
+#if 0
+		id<MTLCommandBuffer> cmdBuf = [cmdQueue commandBuffer]; // NOTE: This can be parallel.
+
+		id<MTLComputeCommandEncoder> computeEnc = [cmdBuf computeCommandEncoder];
+		[computeEnc setComputePipelineState:sumPSO];
+		[computeEnc setBuffer:buffer offset:Arena_offset(arena, x_tensor->value) atIndex:0];
+		[computeEnc setBuffer:buffer offset:Arena_offset(arena, data) atIndex:1];
+		[computeEnc setThreadgroupMemoryLength:threadGroupLength atIndex:0];
+		[computeEnc dispatchThreadgroups:MTLSizeMake(32, 32, 1)
+					   threadsPerThreadgroup:MTLSizeMake(32, 32, 1)];
+		[computeEnc endEncoding];
+
+		id<MTLBlitCommandEncoder> blitEnc = [cmdBuf blitCommandEncoder];
+		[blitEnc fillBuffer:buffer
+					  range:NSMakeRange(offset, sizeof *grad * numel)
+					  value:0];
+		[blitEnc endEncoding];
+
+		[cmdBuffer commit];
+#endif
+	}
 
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = 1, .cols = 1,
 		.op = Operation_sum, .arg0 = x, .arg1 = 0,
 	};
@@ -252,16 +306,17 @@ Mat_sigmoid(
 	Mat *x_tensor = tape->mats + x;
 
 	unsigned numel = Mat_numel(x_tensor);
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
 	for (unsigned i = 0; i < numel; i++) {
 		data[i] = sigmoid(x_tensor->value[i]);
 	}
-	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
+	cblas_scopy(numel, (float[]){0}, 0, grad, 1);
 
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = x_tensor->rows, .cols = x_tensor->cols,
 		.op = Operation_sig, .arg0 = x, .arg1 = 0,
 	};
@@ -284,16 +339,17 @@ Mat_negate(
 	Mat *x_tensor = tape->mats + x;
 
 	unsigned numel = Mat_numel(x_tensor);
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
 	for (unsigned i = 0; i < numel; i++) {
 		data[i] = -x_tensor->value[i];
 	}
-	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
+	cblas_scopy(numel, (float[]){0}, 0, grad, 1);
 
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = x_tensor->rows, .cols = x_tensor->cols,
 		.op = Operation_neg, .arg0 = x, .arg1 = 0,
 	};
@@ -322,18 +378,19 @@ Mat_add(
 	}
 	
 	unsigned numel = Mat_numel(lhs_tensor);
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
 	// Here using BLAS does not make much sense since we would have to call
 	// scopy first and that saxpy.
 	for (unsigned i = 0; i < numel; i++) {
 		data[i] = lhs_tensor->value[i] + rhs_tensor->value[i];
 	}
-	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
-	
+	cblas_scopy(numel, (float[]){0}, 0, grad, 1);
+
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = lhs_tensor->rows, .cols = lhs_tensor->cols,
 		.op = Operation_add,
 		.arg0 = lhs, .arg1 = rhs,
@@ -363,18 +420,19 @@ Mat_mul(
 	}
 
 	unsigned numel = Mat_numel(lhs_tensor);
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
 	// Here using BLAS does not make much sense since we would have to call
 	// scopy first and that sbmv.
 	for (unsigned i = 0; i < numel; i++) {
 		data[i] = lhs_tensor->value[i] * rhs_tensor->value[i];
 	}
-	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
+	cblas_scopy(numel, (float[]){0}, 0, grad, 1);
 
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = lhs_tensor->rows, .cols = lhs_tensor->cols,
 		.op = Operation_mul, .arg0 = lhs, .arg1 = rhs,
 	};
@@ -402,16 +460,17 @@ Mat_pow(
 	}
 
 	unsigned numel = Mat_numel(lhs_tensor);
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
 	for (unsigned i = 0; i < numel; i++) {
 		data[i] = powf(lhs_tensor->value[i], rhs_tensor->value[0]);
 	}
-	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
+	cblas_scopy(numel, (float[]){0}, 0, grad, 1);
 
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = lhs_tensor->rows, .cols = lhs_tensor->cols,
 		.op = Operation_pow, .arg0 = lhs, .arg1 = rhs,
 	};
@@ -443,17 +502,18 @@ Mat_matmul(
 	// MxK * KxN = MxN
 	unsigned M = lhs_rows, N = rhs_cols, K = lhs_cols;
 	unsigned numel = M*N;
-	float *data = Arena_alloc(alloc, sizeof *data * numel*2);
-	if (!data) return 0;
+	float *data = Arena_alloc(alloc, sizeof *data * numel);
+	float *grad = Arena_alloc(alloc, sizeof *grad * numel);
+	if (!grad) return 0;
 
 	float alpha = 1, beta = 0;
 	cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, M, N, K,
 				alpha, lhs_tensor->value, lhs_cols, rhs_tensor->value, rhs_cols,
 				beta, data, rhs_cols);
-	cblas_scopy(numel, (float[]){0}, 0, data+numel, 1);
+	cblas_scopy(numel, (float[]){0}, 0, grad, 1);
 
 	Mat t = {
-		.value = data, .grad = data + numel,
+		.value = data, .grad = grad,
 		.rows = lhs_rows, .cols = rhs_cols,
 		.op = Operation_dot, .arg0 = lhs, .arg1 = rhs,
 	};
@@ -498,10 +558,8 @@ Mat_backprop(unsigned l) {
 				// z = sum(y)
 				// jvp = grad[z] * 1
 				// grad[y] += jvp
-				float alpha = 1;
-				int incx = 0, incy = 1;
 				assert(Mat_numel(t) == 1);
-				cblas_saxpy(Mat_numel(arg0), alpha, t->grad, incx, arg0->grad, incy);
+				cblas_saxpy(Mat_numel(arg0), 1.f, t->grad, 0, arg0->grad, 1);
 			} break;
 			case Operation_sig: {
 				// z = 𝜎(y)
@@ -509,17 +567,17 @@ Mat_backprop(unsigned l) {
 				// grad[y] += jvp;
 				unsigned numel = Mat_numel(t);
 				for (unsigned i = 0; i < numel; i++) {
-					arg0->grad[i] += t->grad[i] * t->value[i]*(1-t->value[i]);
+					// NOTE: to do that 1.f - t->value we need broadcasting or
+					// strides as arguments to our kernels.
+					arg0->grad[i] += t->grad[i]*t->value[i]*(1.f - t->value[i]);
 				}
 			} break;
 			case Operation_neg: {
 				// z = -y
 				// jvp = grad[z] * (-1)
 				// grad[y] += jvp
-				float alpha = -1;
-				int incx = 1, incy = 1;
 				unsigned numel = Mat_numel(t);
-				cblas_saxpy(numel, alpha, t->grad, incx, arg0->grad, incy);
+				cblas_saxpy(numel, -1.f, t->grad, 1, arg0->grad, 1);
 			} break;
 			// TODO: support broadcasting in backpropagation.
 			case Operation_add: {
@@ -528,12 +586,9 @@ Mat_backprop(unsigned l) {
 				// jvp_2 = grad[z] * (0 + 1)
 				// grad[y_1] += jvp_1
 				// grad[y_2] += jvp_2
-				float alpha = 1;
-				int incx = 1, incy = 1;
 				unsigned numel = Mat_numel(t);
-
-				cblas_saxpy(numel, alpha, t->grad, incx, arg0->grad, incy);
-				cblas_saxpy(numel, alpha, t->grad, incx, arg1->grad, incy);
+				cblas_saxpy(numel, 1.f, t->grad, 1, arg0->grad, 1);
+				cblas_saxpy(numel, 1.f, t->grad, 1, arg1->grad, 1);
 			} break;
 			case Operation_mul: {
 				// z = y_1*y_2
@@ -560,6 +615,9 @@ Mat_backprop(unsigned l) {
 
 				unsigned numel = Mat_numel(t);
 				for (unsigned i = 0; i < numel; i++) {
+					// NOTE: the pow we use here is the more general case of the
+					// pow we have in our "front-end", again we would need
+					// strides or broadcasting to make this work.
 					arg0->grad[i] += t->grad[i] * arg1->value[0] * powf(arg0->value[i], arg1->value[0]-1);
 				}
 				// https://github.com/mattjj/autodidact/blob/master/autograd/numpy/numpy_vjps.py#L37
@@ -583,7 +641,10 @@ Mat_backprop(unsigned l) {
 				// When back propagating through this we have to sum all the
 				// contibutions of the various expontials since we reuse e.
 				for (unsigned i = 0; i < numel; i++) {
-					arg1->grad[0] += t->grad[i] * t->value[0] * logf(arg0->value[i]);
+					// NOTE: the derivative of log(x) is the reciprocal of x
+					// (i.e. 1/x). Would it be worth to add log and reciprocal
+					// to the front-end?
+					arg1->grad[0] += t->grad[i] * t->value[i] * logf(arg0->value[i]);
 				}
 			} break;
 			case Operation_dot: {
@@ -622,7 +683,7 @@ void test_linear_layer_and_mse_loss(
 	};
 	if (!alloc->data) {
 		perror("calloc");
-		return 1;
+		abort();
 	}
 
 	// FIXME: this makes the global tape point to stack memory that will not be
@@ -659,18 +720,87 @@ void test_linear_layer_and_mse_loss(
 #include <stdlib.h>
 #include <stdio.h>
 
+/* Current design:
+ *   - each matrix gets its own buffer that is never deallocated for the entire
+ *     duration of the training;
+ *   - weight update and gradient zeroing can be done in a massivelly parallel
+ *     fashion (using parallel command buffer);
+ *   - the training loop needs to generate a set of commands for the GPU and
+ *     maybe have a stopping condition that is a function of the network
+ *     parameters.
+ */
+
 int main(void) {
+	backend = cpu;
+	id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+	id<MTLLibrary> library = [device newDefaultLibrary];
+	NSError *error = nil;
+
+	MTLFunctionConstantValues *consts = [MTLFunctionConstantValues new];
+	id<MTLFunction> sumFunc = [library newFunctionWithName:@"sum"
+											constantValues:consts
+													 error:&error];
+	id<MTLFunction> sigFunc = [library newFunctionWithName:@"sigmoid"
+											constantValues:consts
+													 error:&error];
+	id<MTLFunction> negFunc = [library newFunctionWithName:@"negation"
+											constantValues:consts
+													 error:&error];
+	id<MTLFunction> addFunc = [library newFunctionWithName:@"addition"
+											constantValues:consts
+													 error:&error];
+	id<MTLFunction> mulFunc = [library newFunctionWithName:@"mulitplication"
+											constantValues:consts
+													 error:&error];
+	id<MTLFunction> powFunc = [library newFunctionWithName:@"power"
+											constantValues:consts
+													 error:&error];
+	id<MTLFunction> dotFunc = [library newFunctionWithName:@"matmul"
+											constantValues:consts
+													 error:&error];
+
+	if (error) {
+		NSLog(@"%@", error);
+		return 1;
+	}
+
+	sumPSO = [device newComputePipelineStateWithFunction:sumFunc error:&error];
+	sigPSO = [device newComputePipelineStateWithFunction:sigFunc error:&error];
+	negPSO = [device newComputePipelineStateWithFunction:negFunc error:&error];
+	addPSO = [device newComputePipelineStateWithFunction:addFunc error:&error];
+	mulPSO = [device newComputePipelineStateWithFunction:mulFunc error:&error];
+	powPSO = [device newComputePipelineStateWithFunction:powFunc error:&error];
+	dotPSO = [device newComputePipelineStateWithFunction:dotFunc error:&error];
+
+	if (error) {
+		NSLog(@"%@", error);
+		return 1;
+	}
+
+	cmdQueue = [device newCommandQueue];
+	NSUInteger maximumBufferSize = 1024ull*1024*3072;
+	id<MTLBuffer> buffer = [device newBufferWithLength:maximumBufferSize
+											   options:MTLResourceStorageModeShared];
+	if (!cmdQueue) {
+		fprintf(stderr,
+			"unable to get command queue, maybe you forgot to link with CoreGraphics "
+			"https://developer.apple.com/documentation/metal/1433401-mtlcreatesystemdefaultdevice?language=objc\n"
+		);
+		return 1;
+	}
+	assert(cmdQueue.device == device);
+
 	// FIXME: stack allocated.
 	alloc = &(Arena){
-		.data = calloc(4 * (1 << 10), 1),
-		.size = 4 * (1 << 10),
+		.data = backend == cpu ? calloc(4 * (1 << 10), 1) : buffer.contents,
+		.size = backend == cpu ? 4 * (1 << 10) : maximumBufferSize,
 		.used = 0,
 	};
 	if (!alloc->data) {
 		perror("calloc");
 		return 1;
 	}
-	
+
 	// FIXME: stack allocated.
 	tape = &WengerList_FROM_ARRAY((Mat [1 << 7]){0});
 	tape->used++; // To create the empty tensor.
@@ -707,6 +837,12 @@ int main(void) {
 #endif
 
 #if 0
+[cmdBuffer waitUntilCompleted];
+if (cmdBuffer.error) {
+	NSLog(@"%@", cmdBuffer.error);
+}
+NSLog(@"%@\n", computeEnc);
+
 Mat Mat_op(Mat lhs, Mat rhs) {
 	if (!Mat_same_shape(lhs, rhs)) {
 		return 0;

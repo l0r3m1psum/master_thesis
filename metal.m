@@ -319,6 +319,9 @@ int main(int argc, const char **argv) {
 	if ([[[NSProcessInfo processInfo] arguments] containsObject:@"-inspection"]) {
 		// https://stackoverflow.com/questions/4405006/nslog-printf-specifier-for-nsinteger
 		NSLog(@"name:                                  %@", device.name);
+		// We support only Metal 2 and not 3!
+		NSLog(@"supportsFamily:Metal3                  %d", [device supportsFamily:MTLGPUFamilyMetal3]);
+		NSLog(@"supportsFamily:Common3                 %d", [device supportsFamily:MTLGPUFamilyCommon3]);
 		NSLog(@"architecture.name:                     %@", device.architecture.name);
 		NSLog(@"maximumConcurrentCompilationTaskCount: %tu", device.maximumConcurrentCompilationTaskCount);
 		NSLog(@"shouldMaximizeConcurrentCompilation:   %d", device.shouldMaximizeConcurrentCompilation);
@@ -329,6 +332,7 @@ int main(int argc, const char **argv) {
 		NSLog(@"recommendedMaxWorkingSetSize:          %llu", device.recommendedMaxWorkingSetSize);
 		NSLog(@"hasUnifiedMemory:                      %d", device.hasUnifiedMemory);
 		NSLog(@"maxTransferRate:                       %llu", device.maxTransferRate);
+		NSLog(@"argumentBuffersSupport:                %d", device.argumentBuffersSupport);
 		for (id<MTLCounterSet> counterSet in device.counterSets) {
 			NSLog(@"%@", counterSet);
 			for (id<MTLCounter> counter in counterSet.counters) {
