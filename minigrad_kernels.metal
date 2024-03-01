@@ -9,6 +9,8 @@ uint3 blockIdx  [[threadgroup_position_in_grid]];
 uint3 gridDim   [[threads_per_grid]];
 
 // TODO: make this simpler...
+// also support vectors with non even length
+// https://github.com/zchee/cuda-sample/blob/master/6_Advanced/reduction/reduction_kernel.cu#L179
 [[kernel]] void
 sumFwd(
 	const device float                *input    [[buffer(0)]],

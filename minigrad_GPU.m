@@ -599,9 +599,7 @@ int main() {
 	}
 	for (int i = 0; i < 4*4; i++) {
 		((float *)tape[B].fwd.contents)[i] = .5;
-#if 1
 		((float *)tape[T].fwd.contents)[i] = 1;
-#endif
 	}
 	*(float *)tape[E].fwd.contents = 2;
 
