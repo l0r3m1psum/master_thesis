@@ -1,3 +1,10 @@
+/*
+clang -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform//Developer/Library/Frameworks \
+	-framework XCTest -framework Foundation -bundle \
+	test.m -o test.bundle
+xcrun xctest . # but this does not work
+*/
+// xcodebuild -scheme testerino -destination platform=macOS,arch=x86_64 test
 #import <XCTest/XCTest.h>
 
 @interface testerino : XCTestCase
