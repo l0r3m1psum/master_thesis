@@ -1,0 +1,2369 @@
+% https://en.wikibooks.org/wiki/LaTeX/Document_Structure
+% \documentclass[twoside,openright]{report}
+\documentclass{sapthesis}
+
+\usepackage{graphics}
+
+\title{Demystifying Back-Propagation}
+\subtitle{Matrix calculus for the working computer scientist}
+\author{Diego Bellani}
+\IDnumber{1838645}
+\course{Computer Science}
+\courseorganizer{Facoltà di Ingegneria dell'informazione, informatica e statistica}
+\AcademicYear{2023/2024}
+\advisor{Prof. Massini}
+\authoremail{bellani.1838645@studenti.uniroma1.it}
+\copyyear{2024}
+%\date{2024}
+\examdate{24 May 2024}
+\examiner{Casalicchio}
+\examiner{Gorla}
+\examiner{Massini}
+\examiner{Piperno}
+\examiner{Samory}
+\examiner{Tronci}
+\examiner{Zuliani}
+
+\input{common}
+
+% \setcounter{chapter}{-1}
+
+\iffalse
+Quando jitto levo le branch per seguire propagare il gradiente possono essere
+eliminate.
+
+Fondere i cicli è lo stesso che fondere i kernel? I miei nuclei sono per la
+maggior parte cicli perfettamente nidificati. Quindi se ho lo stesso spazio di
+iterazione la fusione dovrebbe essere banale.
+\fi
+
+% Useful Wikipedia pages:
+%   * https://en.wikipedia.org/wiki/Vectorization_(mathematics)
+%   * https://en.wikipedia.org/wiki/Frobenius_inner_product (I know how to put the needed citation)
+%   * https://en.wikipedia.org/wiki/Adjoint
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+% The setting
+In deep learning libraries, the back-propagation algorithm is typically
+implemented to automatically calculate gradients, relieving users of the burden
+of understanding the underlying mechanics. However, when implementing a
+optimized GPU kernel for a custom operation, understanding how gradients are
+propagated becomes necessary.
+
+% The problem
+To propagate gradients through batched (or matrix) operations one needs to grasp
+enough automatic differentiation and matrix calculus, which can be challenging
+for various reasons. Matrix results in the automatic differentiation literature
+usually are roughly explained and rely on advanced mathematical concepts. The
+matrix calculus literature typically is not concerned with derivations for
+back-propagation. Finally, the lack of a standard definition for matrix
+derivative makes it hard to translate between different resources.
+
+% Our solution/contribution
+In this work, we present the back-propagation algorithm in matrix form together
+with a simple matrix calculus, providing the readers with the necessary tools to
+derive gradient propagation formulas. Our work constitutes the first short and
+self-contained explanation of both of these topics, addressing a gap in existing
+literature.
+\end{abstract}
+
+\tableofcontents
+
+\chapter{Prelude}
+
+We introduce the general context in which this work is located in informal terms to
+justify the various topics.
+
+\section{Machine Learning and Deep Learning}
+
+Machine learning is a subset of artificial intelligence (AI) in which
+statistical models and training algorithms are developed, such that, given a set
+of data, the training algorithm can specialize the statistical model to solve a
+certain task\footnote{If we could specialize a certain model to solve ``any
+task'' we would call this artificial general intelligence. Quotations are
+necessary around ``any task'' since algorithms can't solve literally any
+problem(e.g. the halting problem).}.
+
+The training algorithm iteratively \emph{teaches} the model at solving the task,
+each iteration should improve the ability of the model to perform such task,
+this iterative improvement can be thought of as a form of \emph{learning}. Hence
+the name of this field of study.
+
+This is a fundamental shift of perspective from the Good Old-Fashioned AI
+(i.e. the one that is based on symbolical logic) were so called ``expert systems''
+relied on a hand cured series of facts and inference rules that allowed the
+system to reason about a certain problem in the hope of solving it.
+
+The simplest example of a task commonly performed with machine learning is the
+one of image classification. In this task you have a set of labels for pictures
+(e.g. animal, car, book, etc\dots) and given an input image you have to assign
+the correct label to it.
+
+Machine learning in some form or another exits from a lot of time (just think of
+inferential statistics). The reason it only recently became a viable method, and
+ultimately the most effective one in many fields, is due to the abundance of
+easily available data in digital form (in the order of gibibyte and tebibyte)
+and the huge computing power that the development of semi-conductor design and
+manufacturing has brought us (again in the order of tera-floating-point
+operations per second).
+
+Machine learning has many sub-fields itself, but the one that contributed the
+most to its success and the end of the AI winter\footnote{This is a term used in
+the history of AI to identify periods in which there is a reduction in the
+funding and the interest in AI research. This used to happen after AI research
+failed to meet the inflated expectations that it set multiple times.} (and the
+start of the AI spring) is the so called deep learning. This sub-field concerns
+itself with a specific kind of model: deep artificial neural networks. These
+models are composed of layers and are deep in the sense that they have many of
+them. Having many layers allows these models to perform their tasks with minimal
+pre-processing of the data and no manual feature extraction. This is opposed to
+more classical machine learning models which expect input of data as a vector of
+features.
+
+% TODO: neural networks may deserve a little introduction as DAGs (feed-forward)
+% and connected graphs (recurrent). Of importance to us is the organization in
+% layers and the use of linear algebra in these layers.
+
+If we think about the image classification example it is already non obvious
+which feature to extract from the images to aid a classification algorithm
+perform its task. With the deep learning approach we provide the images to the
+algorithm, almost, as is and the various layers of the model learn to perform
+the various feature extraction sub-tasks that are ultimately used by the
+network itself to perform the classification.
+
+The family of training algorithms that made much of this progress, with deep
+neural networks models, possible are the ones based on mini-batch stochastic
+gradient descent (together with the back-propagation algorithm\footnote{The main
+topic of this work.} to efficiently calculate the gradient). The main idea of
+this family of algorithms is to teach the model by correcting it based on the
+errors that it makes. This error is quantified with a loss function which the
+algorithm tries to minimize, during its execution, with a stochastic
+approximation of the gradient of the loss function.
+
+The various kinds of deep learning models are often called \emph{architectures}.
+These architectures have characteristics that allow them to better solve certain
+kinds of tasks. For example the convolutional neural networks are particularly
+well suited to solve image related tasks (like our classification example).
+
+\subsection{Brief history of the recent notable results}
+\label{sec:notable_results}
+
+The field of deep learning has accomplished many notable results in recent
+years. We have selected the events that in our opinion give the best idea of
+what these modern systems are capable of. Most of these things were unheard of
+(or even unthinkable) just a few years ago and the pace at which we are seeing
+this progress does not seem to stop (or slow down for that matter).
+
+The progresses are not limited to solving or advancing old problems but we now
+have a totally new kind of computer programs such as ones that can generate
+images from prompts, transfer an artist's style to a photo, chat programs that
+can perform question answering tasks in a way that previous search engines never
+could.
+
+The first big accomplishment for deep learning was 2012 when AlexNet (a
+convolutional neural network) won the ImageNet Large Scale Visual Recognition
+Challenge (ILSVRC2012) with a significant margin. To give an idea of how hard
+this task is the number of classes in this dataset is more than 10,000.
+
+In 2016 DeepMind with AlphaGo, which is a program that uses deep learning to
+guide its Monte Carlo tree search with a ``value network'' and a ``policy
+network'', was the first computer program to defeat the Go world champion.
+While defeating humans at chess could be done with GOFAI techniques Go is a much
+harder problem to solve. If we consider the number of possible board
+states as a proxy for the
+% https://math.stackexchange.com/a/1407631
+hardness of this games chess has roughly $10^{45}$ possible board states while
+% https://en.wikipedia.org/wiki/Go_(game)
+Go has $10^{170}$. For reference the number of atoms in the observable universe
+is estimated to be in the order of $10^{80}$.
+
+In 2020 DeepMind with AlphaFold 2 archived astounding results in the Critical
+Assessment of Structure Prediction (CASP14) competition protein folding
+prediction problem.
+
+In 2021 OpenAI released DALL-E a model that allowed to enter a prompt and
+generate an image based on that prompt.
+
+In 2022 OpenAI released the famous ChatGPT chatbot, the model on which this
+program is based on a paper released just a few years prior (2017).
+
+In 2024 (the year of the writing of this work) OpenAI announced Sora, a model
+able to generate video from a prompt.
+
+Many more examples could be given about the impressing capabilities of modern
+deep learning systems, that are left out for the sake of brevity. The ones
+reported were not necessarily the first to do said things and there have of
+course been various improvements on the cited systems. We have decided to select
+the ones that we felt were the most famous and representative ones (especially
+at the time of their release or announcement). It is also notable how little
+time passes from the release of a research paper (Attention is All You Need) to
+the commercial implementation of its ideas (ChatGPT).
+
+Another interesting fact is that while most of the cited systems are closed
+source the open source community is (with a bit of lag) keeping up with
+research and commercial systems. This we feel is very important for the
+democratization of these technologies. Almost each of the cited technologies has
+an open source counter, Autopilot has OpenPilot, GPT-3 has LLAMA, ChatGPT has
+OpenAssistant and DALL-E has StableDiffusion.
+
+\section{Hardware Accelerators}
+
+Computers are equipped with a CPU that is capable of performing all kinds of
+calculations by itself. By its general purpose nature the CPU cannot excel at
+all tasks. Some of these tasks are performed often enough which makes it worth
+implementing specialized hardware to offload these calculations so that
+they can be performed faster. These specialized hardware implementations are
+called hardware accelerators.
+
+Machine learning algorithms require lots of data to be properly trained and the
+bigger the dataset used to train them is, the better they perform at the given
+task. Therefore training these algorithms requires processing a lot of data and
+the later task to be done in a reasonable amount of data requires a lot of
+computing power.
+
+Moreover, most machine learning algorithms and all deep learning ones have at
+their core linear algebra operations (among which the most important one is
+\emph{matrix multiplication}), which have a big compute requirement to data
+ratio. In particular linear algebra requires floating-point point operations.
+
+These two facts combined, big amounts of data and floating-point intensive
+operations, require the use of specialized hardware to accelerate the training
+time so that are completed in a reasonable amount of time.
+
+Training machine learning algorithms therefore requires hardware accelerators
+that maximize the throughput. The first, most common and successful hardware
+accelerators for machine learning are, without a doubt, Graphical Processing
+Units (GPUs).
+
+The reasons for the great use of GPUs in machine learning are going to be
+explained in section~\ref{sec:gpus}. They are by no means the only hardware
+accelerators used (especially in deep learning), there is, in fact, a lot of
+research for ``better hardware accelerators'' that use ideas different from the
+ones in GPUs. One of the most notable examples is certainly Google with its
+Tensor Processing Units (TPU). These hardware accelerators are even more
+specialized to perform matrix multiplication.
+
+But GPUs are also improving at machine learning-related tasks (despite their name),
+and they are definitely here to stay, especially for consumer hardware.
+
+\subsection{GPUs}\label{sec:gpus}
+
+% https://en.wikipedia.org/wiki/Graphics_processing_unit
+
+GPUs, as their name may suggest, come from the gaming world. Initially, they
+were just used to composite data together and generate a video signal to spare
+RAM and CPU cycles. For early consumers, hardware RAM was at a premium and
+dedicating a portion of it to represent every pixel on a screen\footnote{CRT
+displays of early computers with graphic capabilities did not really have
+pixels, but let us just imagine they had them for the sake of simplicity.} would
+not have left any memory for the program itself. Skipping a lot of history and
+simplifying a lot, to solve this issue, the screen was divided into equal
+rectangular regions called \emph{tiles} and the graphic of games was decomposed
+in this form.
+
+A simple example of how this helped to spare memory was for drawing backgrounds.
+You could have specified a single tile with the color of the sky and a cloud
+pattern that then could have been repeated, by the hardware, across the entire
+screen. Another simple usage could be flipping or changing the color of the
+sprite of a character to signify its death.
+
+Over time GPUs started to implement more and more fixed functions for 2D and 3D
+graphics and got the ability to display more granular primitives like polygon
+(represented as a list of points.) The great variety  of this kind of device in
+commercial computers together with the complexity of sending them instructions,
+justified the development of a standardized way to do so. These are generally
+called Application Programming Interfaces (APIs) and OpenGL, before
+% https://www.khronos.org/opengl/wiki/History_of_OpenGL#OpenGL_1.5_(2003)
+version 2.0, was a common API for this purpose.
+
+In 2001 Nvidia released the first GPU with programmable shading. This GPU
+allowed for small programs (without looping capabilities) to be executed for
+each pixel in order to decide its color. The rapid advancement in technology
+quickly allowed to run programs with looping capabilities on GPUs, so a few
+researchers started to gain advantage of the computing capabilities of these
+devices for general-purpose calculations and not only for coloring pixels. This
+was the start of the General Purpose GPU (GPGPU) programming.
+
+Doing GPGPU with shader programs was contrived, therefore in 2007 Nvidia
+released CUDA, an API dedicated to GPGPU, which allowed to run so-called compute
+kernels on GPU, which are fully fledged programs capable of performing many kinds
+of calculations. This started a literal revolution in the numerical software
+world, so much so that GPUs have started to add functionality that are not
+needed by graphics but help with general purpose compute capability.
+
+With all of these developments GPUs have become invaluable accelerators for tasks
+involving floating-point calculations\footnote{We want to emphasize this point
+because CPUs are still better in many tasks.}.
+
+% TODO: a few figures would help this sections
+
+\section{Related Work}
+
+Modern deep learning architectures involve loss functions of matrix argument,
+this implies the use of matrix algebra for calculating the loss and the use of
+matrix calculus for the gradient estimation. For learning matrix algebra there
+are many resources~\cite{strang2019,searle2017,magnus2005}, sadly the same
+cannot be said for matrix calculus resources focused on  deep learning\dots
+Which is exactly the gap in the literature that this work tries to cover.
+
+The problems that plague many resources are stopping at the vector case or
+treating the matrix case too vaguely or too
+complexly~\cite{giering1998,buithanh2023} or just giving results with little to
+no explanation~\cite{giles2008}.
+
+Therefore we are left either with resources focused on matrix
+calculus~\cite{magnus2019,turkington2001}, but with no regard for
+back-propagation or resources focused on automatic differentiation (of which
+back-propagation is a specific case) that do not talk about the matrix
+case~\cite{griewank2008, naumann2011}.
+
+\part{Theory}
+
+\iffalse
+\chapter{Contribution}
+
+We provide the first self contained explanation of the back-propagation
+algorithm for scalar functions containing matrix expressions and the matrix
+calculus necessary to derive the formulas needed for an efficient implementation
+of the gradient accumulation. To keep the explanation short and focused on the
+deep learning use case we avoid introducing unnecessary concepts from the
+automatic differentiation literature (i.e. forward-mode gradient accumulation.)
+Since we present back-propagation together with matrix calculus we always use a
+layout convention for derivatives and focus our description on the
+back-propagation use-case. The matrix calculus literature has not reached a
+consensus on which layout to use, hence making it difficult to translate results
+between resources. We also include a discussion on broadcasting which is not
+usually discussed in either automatic differentiation or matrix calculus
+literature but it is commonly used in deep learning.
+\fi
+
+\chapter{Mathematical Preliminaries}
+
+Here we introduce all the notation and conventions that we are going to use for
+the rest of this work, this chapter can be skimmed or skipped since it is meant
+just to avoid any confusion the reader can just come back to clarify when
+something is not clear in the rest of this work.
+
+\section{Notation}
+
+First of all our functions and variables are going to be defined in terms of
+real numbers.
+
+Lowercase Latin and Greek letters are used for scalars e.g. \(a,\) \(b,\)
+\(c,\) etc\dots This allows us to use this notation consistently even for common
+constant like \(e = 2.71\ldots\) Boldface Latin and Greek letters are used for
+vectors, which are always considered as column matrices, e.g. \(\vec a,\) \(\vec
+b,\) \(\vec c,\) etc\dots Finally for matrices we are going to use capital Latin
+and Greek letters e.g. \(A,\) \(B,\) \(C,\) etc\dots The same convention is used
+for function of a certain value or argument, of which all possible combinations
+are shown in table~\ref{tab:valXarg2}.
+
+\begin{table}
+\centering
+% https://latexref.xyz/_005cvline.html
+\begin{tabular}{rccc}
+    & \(x\)     & \(\vec x\)     & \(X\) \\[2pt]
+    \cline{2-4}
+    \multicolumn{1}{r|}{\(y =\)} & \(f(x)\) & \(f(\vec x)\) & \(f(X)\) \\
+    \multicolumn{1}{r|}{\(\vec y =\)} & \(\vec f(x)\) & \(\vec f(\vec x)\) & \(\vec f(X)\) \\
+    \multicolumn{1}{r|}{\(Y =\)} & \(F(x)\) & \(F(\vec x)\) & \(F(X)\)
+\end{tabular}
+\caption{All possible combinations for function argument and value.}
+\label{tab:valXarg2}
+\end{table}
+
+When we have a sequence of scalar, vectors or matrices we are going to index it
+with an upper script number in square brackets, this is to avoid confusion with
+the exponentiation operator, e.g. \(a^{[1]},\ldots,a^{[n]}\) is a sequence of
+\(n\) scalars.
+
+When we specify the dimensions of a matrix we are going to say that it is \(n\)
+by \(m\), written \(n \times m,\) meaning that it has \(n\) rows and \(m\)
+columns.  When we say that a vector has size \(n\) we mean that it is a matrix
+of size \(n \times 1\), this is handy also because the first subscript always
+indicates a row in both matrices and vectors.
+
+When we want to talk about a scalar in a vector we are going to use a scalar
+subscript, e.g. if \(\vec a\) has size \(n\) then \[\vec a =
+\left[\begin{array}{c} \vec a_1 \\ \vdots \\ \vec a_n \end{array}\right].\]
+
+For matrices we are going to use a pair of scalar subscripts, separated by a
+coma, one of the scalar subscripts can be substituted by a colon to indicate an
+entire row or column,\footnote{Trivially \(A = A_{:,:},\) \(\vec a_{i,1} = \vec
+a_i,\) for every \(i\) and \(\vec a = \vec a_:.\)} e.g.  if \(A\) is \(n \times
+m\) then \[
+    A
+    = \left[\begin{array}{c}A_{1,:} \\ \vdots \\ A_{n,:}\end{array}\right]
+    = [\begin{array}{ccc}A_{:,1} & \cdots & A_{:,m}\end{array}]
+    = \left[\begin{array}{ccc}
+        A_{1,1} & \cdots & A_{1,m} \\
+        \vdots & \ddots & \vdots \\
+        A_{n,1} & \cdots & A_{n,m}
+    \end{array}\right].
+\]
+
+% For ease of typesetting i.e. avoiding \left( and \right) and to avoid any
+% confusion with exponentiation.
+The transpose of a matrix \(A\) is going to be denoted with a prime superscript
+\(A'\).
+
+% https://en.wikipedia.org/wiki/Notation_for_differentiation
+% % https://en.m.wikipedia.org/wiki/Matrix_calculus#Layout_conventions
+When we are going to talk about derivatives we are going to use \(\der\) for the
+total derivative, \(\partialfrac\relax\relax\) for the partial derivative (which
+are going to be laid out using the numerator convention) and \(\dif\) for the
+differential. We are going to elaborate further on this part in
+section~\ref{sec:matcalc}.
+
+\section{Common Functions and Constants}
+
+Together with the definition of some operations and some useful constants, we
+are also going to state some useful properties of said operations (without
+proving them) that are going to greatly simplify our derivations later.
+
+The juxtaposition of two matrices is used for the classic matrix multiplication.
+We also use the + symbol to add two matrices element-wise as long as they have
+the same shape.
+
+The standard basis vector for a vector space of size \(n\) are going to be
+denoted as \(\vec e^{[1]},\ldots,\vec e^{[n]}.\) \(\vec e^{[1]}\) has a 1 in
+position \(i\) and 0 everywhere else.
+
+We are going to denote the ``one vector'' as \(\vec 1 = \sum_{i=1}^n e^{[i]},\)
+the ``zero vector'' as \(\vec 0\), the vector with all zeros, the identity
+matrix \(I = [\begin{array}{ccc}e^{[1]} \cdots e^{[n]}\end{array}]\).
+
+% The size of I could be done with a normal subscript, since we always index in
+% matrix with two ``symbols'', therefore there is no ambiguity, but for consistency
+% we don't.
+If there is any ambiguity with the size of one of the above mentioned vectors or
+matrix, we are going to use a left subscript, e.g. if a vector space has size
+\(n\) then \(\leftidx{_n}{\vec e}{^{[i]}}\) is the \(i\)th\footnote{Trivially
+\(\leftidx{_n^{\vphantom{^{[i]}}}}{\vec e}{^{[i]}_i} = 1\) for all \(i.\)}
+standard basis vector of size \(n\) and \(\leftidx{_n}I{}\) has size \(n \times
+n.\) 
+
+Thanks to the matrix product we can specify a matrix of size \(n \times m\) of
+all zeros, or ones as \(\cmat 0 n m\) and \(\cmat 1 n m.\)
+
+For the rest of this section let \(A\) be \(n \times m\) and \(S\) be \(n \times
+n.\)
+
+
+The scalar-matrix product between \(a\) and A is denoted as \(a \cdot A\) and \[
+a \cdot A = \left[\begin{array}{ccc}
+    a A_{1,1} & \cdots & a A_{1,m} \\
+    \vdots & \ddots & \vdots \\
+    a A_{n,1} & \cdots & a A_{n,m}
+\end{array}\right].
+\] We will also write \(A \cdot a\) to mean the same thing.
+
+If \(B\) has the same size as \(A\), then the Hadamard product between them, is
+just their element-wise multiplication. It is denoted as \(A \hadam B\) and \[
+A \hadam B = \left[\begin{array}{ccc}
+    A_{1,1} B_{1,1} & \cdots & A_{1,m} B_{1,m} \\
+    \vdots & \ddots & \vdots \\
+    A_{n,1} B_{n,1} & \cdots & A_{n,m} B_{n,m}
+\end{array}\right].\]
+
+The matrix-scalar power raises each element of a matrix to a certain \(a\), the
+scalar-matrix power instead makes it so that every element of a matrix is used as
+the exponent of a certain base \(a\). We denote them as \(A^{{\cdot}a}\) and
+\(a^{{\cdot}A}.\) Therefore \[
+    A^{{\cdot}a} =
+    \left[\begin{array}{ccc}
+        A_{1,1}^a & \cdots & A_{1,m}^a \\
+        \vdots & \ddots & \vdots \\
+        A_{n,1}^a & \cdots & A_{n,m}^a
+    \end{array}\right],
+    a^{{\cdot}A} =
+    \left[\begin{array}{ccc}
+        a^{A_{1,1}} & \cdots & a^{A_{1,m}} \\
+        \vdots & \ddots & \vdots \\
+        a^{A_{n,1}} & \cdots & a^{A_{n,m}}
+    \end{array}\right].
+\]
+
+We can now define the softmax of the columns of a matrix as \[S(X) =
+e^{{\cdot}X} \hadam \left(\vec 1 \vec 1' e^{{\cdot}X}\right)^{{\cdot}-1}.\] In
+the case of a vector we are going to write \(\vec s(\vec x) = e^{{\cdot}\vec x}
+\cdot (\vec 1' e^{{\cdot}\vec x})^{{\cdot}-1}.\)
+
+The Kronecker product is a sort of generalization of the matrix scalar product
+but between every element of a matrix w.r.t. another one. If B has any size we
+denote it as \(A \krone B\) and \[
+    A \krone B = \left[\begin{array}{ccc}
+        A_{1,1} \cdot B & \cdots & A_{1,m} \cdot B \\
+        \vdots & \ddots & \vdots \\
+        A_{n,1} \cdot B & \cdots & A_{n,m} \cdot B
+    \end{array}\right].\]
+Note that if \(A\) has size \(1 \times 1\) and \(A = a\) for some \(a\) than \(a
+\krone A = a \cdot A.\)
+
+Vectorizing a matrix means stacking its \(m\) columns on top of each other to
+form another vector. Matricising a vector means taking its \(nm\) rows, \(n\) at
+the time and concatenating them, from left to right, to form an \(n \times m\)
+matrix. We denote these two operations as \(\vect(A) = \vec a\) and
+\(\matr(\vec a) = A\) respectively and we define them formally as
+\begin{eqnarray*}
+    \vect(A) &=& \sum_{i=1}^{m} \vec e^{[i]} \krone A \vec e^{[i]}, \\
+    % TODO: mettere un commento con l'URL a stackoverflow.
+    \matr(\vec a) &=&
+        (\vect(\leftidx{_n}I{})' \krone \leftidx{_m}I{})
+        (\leftidx{_n}I{} \krone \vec a).
+\end{eqnarray*}
+It is interesting to note that \(\vect\) is idempotent i.e.  \(\vect(\vect(A)) =
+\vect(A)\).
+
+Diagonalizing a vector is the process of turning it into a squared matrix with
+every element equal to zero except for the diagonal which is occupied by said
+vector. Diagonalizing a square matrix is the process of extracting is diagonal
+as a vector. If we \(\vec a\) be a vector of size \(n\) we define them formally
+as
+\begin{eqnarray*}
+    % https://en.wikipedia.org/wiki/Diagonal_matrix
+    \Diag(\vec a) &=& \vec a \vec 1' \hadam I, \\
+    % https://math.stackexchange.com/a/3122442
+    \diag(S) &=& (S \hadam I) \vec 1.
+\end{eqnarray*}
+
+If \(B\) has the same size as A and the Hadamard product is being vectorized
+than it can be removed from an expression as such \[\vect(A \hadam B) =
+\Diag(\vect(A)) \vect(B).\] For vectors we can do a similar thing, let \(\vec
+x\) and \(\vec y\) have the same size, then \[\vec x \hadam \vec y = \Diag(\vec
+x) \vec y.\]
+
+It is interesting to note these connections between the Hadamard product and
+matrix multiplication, if \(a\) has size \(m,\) then \(A \hadam \vec 1 \vec a' =
+A \Diag(\vec a).\)
+
+
+The trace of a square matrix is the sum of its diagonal elements. We define it
+as \[\trace(S) = \vec 1' \diag(S) \vec 1.\]
+
+This function is useful due to its many properties that make many index free
+manipulation easier. In particular we have that \[\trace(A (B \hadam C)) =
+\trace((A \hadam B')C)\] and that it is circulant shift invariant \[\trace(ABC)
+= \trace(CAB) = \trace(BCA).\] Please note that you cannot generally commute
+matrix products inside the trace function, you can just ``shift'' them.
+
+The trace is a linear function, that is, if \(Q\) has the same size as \(S\)
+then \(\trace(S + Q) = \trace(S) + \trace(Q)\) and if \(a\) is any scalar then
+\(\trace(a \cdot S) = a \trace(S).\) We have similar results for the transpose
+and element-wise functions e.g. if \(B\) has the same size as \(A\) \((A + B)' =
+A' + B'\) and \((A \hadam B)' = A' \hadam B'.\)
+
+% https://scicomp.stackexchange.com/a/23781
+
+The Frobenius inner product is just a generalization of the familiar dot product
+between two vectors. If \(B\) has a compatible dimension with \(A\) then we
+denote it as \(\langle A,B\rangle\) and \[\langle A,B \rangle = \vect(A)'
+\vect(B).\] A useful equality regarding the trace is the following \[\langle A,
+B \rangle = \trace(A'B) = \vec 1' (A \hadam B) \vec 1.\]
+
+The Frobenius norm is just a generalization of the familiar Euclidean norm. We
+denote it as \(\Vert A\Vert\) and \[\Vert A \Vert = \sqrt{\langle A, A \rangle}.\]
+
+If \(B\) has the same size as \(A\) and their columns represent a batch, we can
+express neatly the sum of the mean squared errors of the batch as \(\mathrm{mse}
+= \left(1/n \cdot \vec 1' (A - B)^{{\cdot}2}\right) \vec 1.\) We can note that
+\[
+    \mathrm{mse}
+    = \frac 1 n \vec 1' (A - B)^{{\cdot}2} \vec 1
+    = \frac 1 n \vect(A - B)' \vect(A - B)
+    = \frac 1 n \Vert A - B\Vert^2.
+\]
+
+Finally we have that if \(A,\) \(B\) and \(C\) have compatible sizes
+\[\vect(ABC) = (C' \krone A) \vect(B).\] In particular \[\vect(AB) = (I \krone
+A) \vect(B) = (B' \krone A) \vect(I) = (B' \krone I) \vect(A) \mathrm,\] that
+is with \(\vect\) we can transform a matrix multiplication in a matrix-vector
+one.
+
+\chapter{Back-propagation for Scalars}
+
+% https://www.youtube.com/watch?v=mICbKwwHziI
+% https://www.astrophys-neunhof.de/mtlg/se77211.pdf
+
+The objective of this work is to remove the magic from the libraries used for
+deep learning, in particular how the back-propagation algorithm is implemented
+in the general case. Understanding this algorithm is crucial for implementing
+one such library.
+
+To do so we are going to start by explaining the trivial case of the
+back-propagation for scalars. This is going to allow us to get some familiarity
+with the general mechanism involved and to learn a bit about the differences with
+other algorithmic differentiation processes.
+
+Finally, we are going to see what are why is necessary to generalize
+back-propagation and what problems with generalizing these algorithms to other
+kind of ``numerical objects'' like vectors and matrices.
+
+Back-propagation is a special case of automatic differentiation in reverse
+accumulation mode. In particular, it is the case in which the function that we
+are differentiating has only one (scalar) output. For neural network training
+this scalar output is the loss.
+
+\section{What back-propagation is not}
+
+Depending on how you count, there are two to three main classes of automatic
+method to calculate the gradient: numerical differentiation, symbolic
+differentiation and automatic differentiation.
+
+Numerical differentiation is done basically by applying the limit definition of
+the derivative.\footnote{There are improved ways of doing this calculation but
+they all rely on the same principle.} 
+For example, let \(\vec f : \mathcal R^2 \to
+\mathcal R\). If  we want to calculate \(\der\vec f(a,b) =
+\left[\begin{array}{cc} \partialfrac{\vec f(a,b)}a &
+\partialfrac{\vec f(a,b)}b\end{array}\right]\) we can approximate
+it by doing
+\begin{eqnarray*}
+    \partialfrac{\vec f(a,b)}a
+    &\approx& \frac{\vec f(a + h,b) - \vec f(a,b)}h \\
+    \partialfrac{\vec f(a,b)}b
+    &\approx& \frac{\vec  f(a,b + h) - \vec f(a,b)}h
+\end{eqnarray*}
+where \(h>0\) is a small number. This method is really easy to implement but it
+has two great problems that cannot be solved. The first is that it has numerical
+accuracy issues (the reasons for which this is the case are beyond the scope of
+this work), the second one is that requires \(O(n)\) evaluations of \(f\) to
+calculate the gradient, where \(n\) is the number of argument of the function,
+in this case 2.
+
+Symbolic differentiation is usually done when manipulating mathematical
+expressions as a data structure. This method can solve the numerical stability
+issues of the previous one, but if implemented in a naive way can lead to a
+problem known as \emph{expression swell}. This basically amounts to an
+exponential increase in the size of the formula (due to careless application of
+differentiation rules) and in a lot of duplicated work for calculating again and
+again parts of the formula that are identical but put in different places. To
+give a trivial example, let \(f(a) = e^a g(a)\), now let's take its derivative
+\[\der f(a) = e^a g(x) + e^a \der g(x),\] as you can see the careless
+application of the derivative rule for multiplication made us increase the size
+of the formula unnecessarily and made us recalculate the value of \(e^a\). A
+more efficient formulation would have been \[\der f(a) = e^x (g(x) + \der
+g(x)).\]
+
+A better implementation of symbolical differentiation (i.e. one that involves
+common sub-expression elimination) is functionally equivalent to automatic
+differentiation, even with respect to control flow, as shown by S\"oren
+Laue~\cite{laue2019}.\footnote{The difference in the name comes from the fact
+that symbolic differentiation comes from a different approach to the problem and
+it is usually used in computer algebra systems like Mathematica.}.
+
+Automatic differentiation~\cite{baydin2017} has two main modes known as forward
+and reverse. For the needs of this work, and most of machine learning, only the
+reverse mode is used.\footnote{The forward mode is used for calculations
+involving Hessians, so it definitely has its uses, but we are not going to see
+them.} In particular, in the field of neural networks, the reverse-mode
+automatic differentiation algorithm for the function of a scalar value (i.e. the
+loss) has been independently rediscovered and given the name
+back-propagation~\cite{rumelhart1986}. A Venn diagram showing where the
+back-propagation algorithm is located in the automatic differentiation
+literature is shown in figure~\ref{fig:ad-venn}.
+
+\begin{figure}
+\centering
+\includegraphics{figures.1}
+\caption{Venn diagram showing the various modes for accumulated gradients in the
+automatic differentiation literature. FWD stands for forward-mode and BWD for
+backward-mode. MIX is used to represent all the methods that interleave forward
+and backward gradient accumulation, which in the general case are necessary since
+gradient accumulation in NP-complete.}
+\label{fig:ad-venn}
+\end{figure}
+
+In the next section, we are going to see what this algorithm is about and what
+its advantages are.
+
+\section{An illustrative example}
+
+We are going to start with an example from~\cite{baydin2017}. Let \(y = f(a,b) =
+\ln(a) + a b - \sin(b)\), say we compute \(y = f(2,5)\) and we are interested in
+its gradient i.e. \(\partialfrac y a\) and \(\partialfrac y b.\) Let us start by
+evaluating the function one elementary operation at a time in the following way:
+\begin{eqnarray*}
+a = x^{[-1]} &=& 2 \\
+b = x^{[0]}  &=& 5 \\
+    x^{[1]}  &=& \ln\left(x^{[-1]}\right) = \ln(2) \\
+    x^{[2]}  &=& x^{[-1]} \times x^{[0]} = 2 \times 5 \\
+    x^{[3]}  &=& \sin\left(x^{[0]}\right) = \sin(5) \\
+    x^{[4]}  &=& x^{[1]} + x^{[2]} \approx 0.693 + 10 \\
+y = x^{[5]}  &=& x^{[4]} + x^{[3]} \approx 10.693 + 0.959
+\end{eqnarray*}
+
+We know from basic calculus that \[
+    \partialfrac y b = \partialfrac{x^{[5]}}{x^{[0]}}
+    = \overbrace{
+        \partialfrac{x^{[5]}}{x^{[4]}} \partialfrac{x^{[4]}}{x^{[2]}}
+    }^{\partialfrac{x^{[5]}}{x^{[2]}}} \partialfrac{x^{[2]}}{x^{[0]}}
+    + \partialfrac{x^{[5]}}{x^{[3]}} \partialfrac{x^{[3]}}{x^{[0]}},
+\] and similarly for the other derivative we have that \[
+    \partialfrac y a = \partialfrac{x^{[5]}}{x^{[-1]}}
+    = \overbrace{
+        \partialfrac{x^{[5]}}{x^{[4]}} \partialfrac{x^{[4]}}{x^{[1]}}
+    }^{\partialfrac{x^{[5]}}{x^{[1]}}} \partialfrac{x^{[1]}}{x^{[-1]}}
+    + \overbrace{\partialfrac{x^{[5]}}{x^{[4]}} \partialfrac{x^{[4]}}{x^{[2]}}
+    }^{\partialfrac{x^{[5]}}{x^{[2]}}} \partialfrac{x^{[2]}}{x^{[-1]}}
+\]
+
+If we let \(\bar x^{[i]} = \partialfrac y {x^{[i]}} =
+\partialfrac{x^{[5]}}{x^{[i]}},\) that is the sensitivity of the output w.r.t. a
+change in that variable, we can incrementally calculate both \(\bar x^{[-1]}\)
+and \(\bar x^{[0]}\) in the following way:
+\begingroup
+\renewcommand{\partialfrac}[2]{\textstyle\frac{\partial#1}{\partial#2}}
+\begin{eqnarray*}
+    \bar x^{[5]}    &=& \partialfrac{x^{[5]}}{x^{[5]}}
+        = 1 \\
+    \bar x^{[4]}    &=& \bar x^{[5]}\partialfrac{x^{[5]}}{x^{[4]}}
+        = \bar x^{[5]} \times 1 = 1 \\
+    \bar x^{[3]}    &=& \bar x^{[5]}\partialfrac{x^{[5]}}{x^{[3]}}
+        = \bar x^{[5]} \times (-1) = -1 \\
+    \bar x^{[1]}    &=& \bar x^{[4]}\partialfrac{x^{[4]}}{x^{[1]}}
+        = \bar x^{[4]} \times 1 = 1 \\
+    \bar x^{[2]}    &=& \bar x^{[4]}\partialfrac{x^{[4]}}{x^{[2]}}
+        = \bar x^{[4]} \times 1 = 1 \\
+    \bar x^{[0]}    &=& \bar x^{[3]}\partialfrac{x^{[3]}}{x^{[0]}}
+        = \bar x^{[3]} \times \cos\left(x^{[0]}\right) \approx -0.282 \\
+    \bar x^{[-1]} &=& \bar x^{[2]}\partialfrac{x^{[2]}}{x_{-1}}
+        = \bar x^{[2]} \times x^{[0]} = 5 \\
+    \bar x^{[0]}    &\pluseq\phantom+& \bar x^{[2]}\partialfrac{x^{[2]}}{x^{[0]}}
+        = \bar x^{[2]} \times x_{-1} \approx 1.716 \\
+    \bar x^{[-1]} &\pluseq\phantom+& \bar x^{[1]}\partialfrac{x^{[1]}}{x^{[-1]}}
+        = \frac{\bar x^{[1]}}{x^{[-1]}} = 5.5 \\
+\end{eqnarray*}
+\endgroup
+
+In a nutshell, this is the back-propagation algorithm. When performing the
+calculations for our function, we record the dependency graph, as shown in
+figure~\ref{fig:dag}, and we \emph{adjoint} \(\bar x^{[i]}\) to each variable
+\(x^{[i]}\). When we have obtained our scalar output, we topologically sort our
+graph and then start to propagate the gradient backward, starting from the
+scalar output and ending at our input variables. In this way, we obtain the
+gradient of our loss.
+
+\begin{figure}
+    \centering
+    \includegraphics{figures.2}
+    \caption{Dependency graph of \(f.\)}
+    \label{fig:dag}
+\end{figure}
+
+This algorithm has no numerical stability issues, as opposed to numerical
+differentiation, and has a cost that is proportional to evaluating the
+function in any case, in contrast with naive symbolic differentiation.
+
+This is also true for its generalization, reverse-mode automatic
+differentiation, which is a numerically accurate and efficient algorithm for
+calculating the derivatives of a function \(\vec f : \mathcal R^n \to \mathcal
+R^m,\) where \(n>>m.\)
+
+We can summarize what we have done until now using the C99-like pseudocode in
+figure~\ref{fig:pseudo}.
+
+% https://tex.stackexchange.com/questions/94699/absolutely-definitely-preventing-page-break
+\newenvironment{absolutelynopagebreak}
+  {\par\nobreak\vfil\penalty0\vfilneg
+   \vtop\bgroup}
+  {\par\xdef\tpd{\the\prevdepth}\egroup
+   \prevdepth=\tpd}
+
+\begin{figure}
+\centering
+\begin{minipage}{.7\textwidth}
+% https://latexref.xyz/tabbing.html
+\begin{tabbing}
+void \= backprop(int l) \{\+\\
+    toposort(tape);\\
+    for (int i = 0; i \textless{} l; i++) grad[i] = 0;\\
+    grad[l] = 1;\\
+    /\textasteriskcentered{}
+    Assuming only binary operations.
+    \textasteriskcentered/\\
+    for \=(int i = l; i \textgreater{} 0; i-{}-) \{\+\\
+        int \=l = tape[i].left, r = tape[i].right, \\
+            \>op = tape[i].op;\\
+        grad[l] += vjp[op].l(grad[i], val[r], val[l]);\\
+        grad[r] += vjp[op].r(grad[i], val[r], val[l]);\-\\
+    \}\-\\
+\}\\
+\end{tabbing}
+\end{minipage}
+\caption{Pseudo-code for the back-propagation algorithm. We have three arrays:
+tape, val and grad. The first one records the dependencies among the various
+variables that make the computation, the second one stores the value of each of
+the intermediate results for computing the function and the last one the
+gradient of the output w.r.t that variable. The vjp function stands for
+vector-Jacobian product, we are going to elaborate further on this in
+section~\ref{sec:derivations}, right now you can think of it as the
+multiplication between the gradient accumulated up to that point and the
+derivative of the current function.}
+\label{fig:pseudo}
+\end{figure}
+
+\section{The need for generalization}
+
+The algorithm we have described before is fairly easy to implement and it can be
+used, without any modification, to calculate losses of any kind of neural
+networks.
+
+There is a catch, let us consider an operation like matrix multiplication, which
+is ubiquitous in neural networks, let us also assume that we can perform it in
+\(O(n^2)\) operations. For each operation that we perform, we have to record some
+amount of information, for the sake of the argument say that 1byte
+is enough. This means that if we have to multiply two matrices of size \(1024
+\times 1024\) we would have to keep in memory 1Mib just to remember the
+operations that happen inside the matrix multiplication. If we use a realistic
+algorithm for matrix multiplication and a realistic size for the number of bytes
+that we need to record a single operation, we are very quickly in a much worse
+situation.
+
+The bad news is that it does not finish here, since keeping track of each scalar
+makes it harder to organize the data in memory in such a way that these
+calculations can be performed by BLAS routines, therefore even performance
+suffers.
+
+Therefore we need to group numbers in a way that alleviates our problem related
+to tracking each number, we need matrices. The first thing that comes is to use
+vectors, this is a fine choice if we plan to only use our network for inference
+on a single datum. This alleviates both the problems that we have regarding the
+memory needed for keeping track of many operations, since now a multiplication
+between a matrix and a vector is a single operation, and of performance since it
+is now much easier to use BLAS primitives like GEMV to implement our operations.
+
+If we are also interested in training neural networks, we can do even better.
+Training is often performed on batches (or mini-batches) of data by
+summing the loss of each datum in the batch and this can be naturally expressed
+using matrices.\footnote{This is also true if we are interested in performing
+inference in batch.}
+
+Let us give a practical example. Let \(\vec x\) be a datum and \(\vec y\) our
+desired outcome for it, we can calculate the mean squared error loss of a
+2-layer neural network, with a sigmoid activation function \(\vec s\), in the
+following way \[\frac 1 n \Vert\left(W^{[2]} \vec s\left(W^{[1]} \vec x + \vec
+b^{[1]}\right) + \vec b^{[2]}\right) - \vec y\Vert^2.\] Now if we let \(X\) be a
+batch of data and \(Y\) a batch of desired outcomes for the elements in batch,
+we can easily generalize this expression to an entire batch using matrices \[
+    \frac 1 n \left\Vert
+        \left(W^{[2]} S\!\left(W^{[1]} X + \vec b^{[1]} \vec 1'\right) + \vec b^{[2]} \vec 1'\right) - Y
+    \right\Vert^2.
+\]
+
+In this way, we can always use single matrix operations to perform
+calculations on the entire batch, independently of the number of elements in it,
+we can achieve better throughput with BLAS primitives like GEMM.
+
+We have now seen how by keeping the same semantics of the code that operates on
+single scalars, we can gain performance benefits by simply switching the
+mathematical objects at the base of our algorithm. This also makes operator
+fusion easier and more effective.
+
+\section{Problems with generalization}
+
+\begingroup
+\renewcommand\matrix{\left[\begin{array}{ccc}&&\\&&\\&&\end{array}\right]}
+\renewcommand\vector{\left[\begin{array}{ccc}&&\end{array}\right]}
+
+Let us now focus on the vector case, in particular of a function of vector
+argument and scalar value that is internally composed of functions of vector
+value and argument. If the input value is \(\vec x^{[0]}\) and the values
+computed by the various functions are \(\vec x^{[1]}, \ldots, x^{[n]}\)
+terminating in the scalar output of the last function, then we can write the
+derivative of the output w.r.t. the input using the chain rule as
+\[\partialfrac{x^{[n]}}{\vec x^{[n-1]}} \partialfrac{\vec x^{[n-1]}}{\vec
+x^{[n-2]}} \cdots \partialfrac{\vec x^{[1]}}{\vec x^{[0]}}.\] If we focus only
+on the shape of the objects along the chain (i.e. the vectors and matrices) we
+can visualize the chain rule in this way\[\vector \matrix \dots \matrix.\]
+Viewing it like this it is obvious that it is more convenient to perform our
+calculation by multiplying the objects from left to right.
+\endgroup
+
+Even if we use the right order for the multiplications, which is the one
+naturally imposed by the topological sort, we are still wasting a lot of
+resources since usually the matrices \(\partialfrac{\vec x^{[j]}}{\vec
+x^{[i]}}\) along the chain are very sparse and most of the memory we allocate
+for them is going to be filled with zeros.
+
+If we ignore this problem for now, implementing back-propagation for the loss of
+vector argument is not much harder than the scalar version since taking
+derivatives of a function of vector argument and value (that can happen in the
+middle of the neural network) is common knowledge, just a standard vector
+calculus.
+
+When we start to take into account matrices this creates the possibility of
+having functions of matrix argument and value in the middle of our computation,
+and taking derivatives of this kind of function is not common knowledge.
+
+The reader might be surprised by the fact that this notion for matrix calculus
+is not only uncommon but it also has no standardized arrangement for the partial
+derivatives. While the end result is always going to be some mathematical object
+that contains all possible partial derivatives w.r.t. each single element in the
+input and argument matrix, how they should be organized has not been settled.
+This has important repercussions in how fundamental calculations (like the chain
+rule~\cite{magnus2010}) have to be performed for these objects.
+
+We may ask ourselves: can we sidestep this problem by performing this
+calculation explicitly i.e.  decomposing the matrix operations in their
+elementary operations and perform the derivation on that? This can be a
+worthwhile exercise for small examples but proving anything in this way for the
+general case rapidly becomes unwieldy, and we think that anyone can agree that
+like for the vector case were developing a general symbolic method not only
+helps the derivation but also the understanding and new discoveries.
+
+Now that we have convinced ourselves that we need some robust method to go about
+this matrix derivation business, as a humble computer scientist which options do
+we have at our disposal?
+
+The go-to reference for this kind of thing is The Matrix
+Cookbook~\cite{petersen2012}. While this is a terrific reference for many things
+and contains some of the answers we need, the way in which they are presented
+does not make it obvious that it is what we are looking for. So without
+additional information, it cannot help us.
+
+Back-propagation is a specific case of the more general reverse-mode automatic
+differentiation algorithm, which together with its ``dual'' algorithm
+forward-mode automatic differentiation, has a good deal of literature on it. In
+particular, there is a collection of results like~\cite{giles2008}, but as the
+name may suggest they are just results without any satisfactory explanation
+(again, unless pretty much you already know the answers and need reference).
+This can certainly allow you to implement the back-propagation through the most
+common operations, but this leaves you unable to derive your own results or
+possible improvements for special cases that you care about. Most importantly,
+this does not leave you with a good understanding of what is going on in the
+algorithm you are implementing (without even talking about how one may approach
+debugging this kind of numerical algorithm.)
+
+If one starts looking around for answers, one may encounter the so-called
+``adjoint trick'' for deriving these results or an even more general method
+based on tensor calculus~\cite{laue2018, laue2020}, but they usually involve
+more math than a humble computer scientist can stomach.
+
+Together with the difficulty of derivation now the problem that we have cited
+before is even more accentuated.  Let \(F\) be a function of size \(m \times n\)
+with argument \(X\) of size \(p \times q\). However, we are going to define its
+derivative at \(X\) it has to contain the \(mnpq\) partial derivatives. To be
+more concrete, let us consider \(m=n=p=q=1024\), and say that we store all the
+entries of our matrices in the IEEE-754 single precision floating point format.
+This means that if we want to store this derivative we are going to need 4TiB of
+memory, most of which is still going to be just zeros.
+
+\chapter{Back-propagation for Matrices}
+
+In this chapter, we are going to explain how to generalize the previously
+introduced back-propagation for scalars to functions of matrix value and
+argument. We start with an introduction of an elegant matrix calculus that is
+going to greatly simplify our treatment of the subject.
+
+\section{Matrix Calculus}\label{sec:matcalc}
+
+This section is taken from the work of Magnus, Neudecker and Abadir~\cite{neudecker1969,
+magnus1985, magnus2005, magnus2007, magnus2010, magnus2019}. 
+Also~\cite{liu2022} gives a good perspective on the field of matrix
+differential calculus and its development in general.
+
+Matrix calculus is the less known, bigger cousin, of vector calculus. So let us
+start with a quick refresher on the latter.
+
+Now let \(\vec f\) be a differentiable function, and let \(\vec y = \vec f(\vec
+x)\) for some \(\vec x\), with \[
+    \der\vec f(\vec x)
+    = \partialfrac{\vec y}{\vec x'}
+    = \left[\begin{array}{c|c|c}
+        \partialfrac{\vec y}{\vec x_1} & \cdots & \partialfrac{\vec y}{\vec x_n}
+    \end{array}\right]
+    = \left[\begin{array}{c|c|c}
+        \partialfrac{\vec y_1}{\vec x_1} & \cdots & \partialfrac{\vec y_1}{\vec x_m} \\
+        \vdots & \ddots & \vdots \\
+        \partialfrac{\vec y_n}{\vec x_1} & \cdots & \partialfrac{\vec y_n}{\vec x_m}
+    \end{array}\right]
+\] we denote the derivative (or Jacobian) of \(\vec f\) at \(\vec x\).
+
+We now want to emphasize a few facts. We explicitly use the numerator layout.
+Numerator layout means that the Jacobian is going to have in each column each
+element \(\vec y_i\) and in each row each \(\vec x_i\). We say explicitly it
+because we are going to write \(\partialfrac{\vec y}{\vec x'}\), to emphasise
+the fact that \(\vec x\) is laid out as a row and \(y\) as a column. In the
+special case where our differentiable function is \(y\) and \(y = f(x)\) we have
+that \[
+    \der f(\vec x) = \partialfrac y {\vec x'} = \left[\begin{array}{c|c|c}
+        \partialfrac y {\vec x_1} & \cdots & \partialfrac y {\vec x_n}
+    \end{array}\right]
+\] is a row vector, that is also known as the gradient of \(f\) at \(\vec x\),
+written as \(\nabla f(x).\)
+
+There is not a conventional definition for matrix valued functions of matrix
+argument. The one we are going to use in this work is the one from Magnus and
+Naudecker~\cite{magnus2019}. We have decided to adopt their definition because we have
+found it is the most useful for our use case, and we hope that it becomes the standard
+for machine learning related derivation. They go into great detail on why this
+definition makes sense and why it is mathematically sound, we are not going to
+elaborate on this matter. The interested reader is encouraged to read their
+work for further details.
+
+To make our lives easier we are going to approach matrix calculus using
+differentials rather than derivatives.
+
+% https://en.wikipedia.org/wiki/Differential_of_a_function
+Let us start by defining the differential for the scalar case. Remember that
+\[\lim_{h \to 0} \frac{f(x + h) - f(x)}h = \der f(x)\] which can be rewritten as
+\[f(x + h) - f(x) = (\der f(x))h + r(h,x),\] \[f(x + h) = f(x) + (\der f(x))h +
+r(h,x),\] were \(\lim_{h \to 0} r(h,x) = 0\) and it can be thought of as
+a reminder or error term. We can now define the differential of \(f\) at \(x\)
+with increment \(h\) as \(\dif f(x;h) = (\der f(x))h\), but usually written as
+\((\der f(x))\dif x.\)
+
+We can now do a similar reasoning for vector functions and get \[\vec f(\vec x +
+\vec h) = \vec f(\vec x) + (\der\vec f(\vec x))\vec h + \vec r(\vec h,\vec x)\]
+were \(\dif \vec f(\vec x;\vec h) = (\der \vec f(\vec x))\vec h,\) and it is
+usually written as \((\der\vec f(\vec x))\dif\vec x.\)
+
+Again with a similar reasoning we can generalize our definition to the matrix
+case using the \(\vect\) function as such \[\vect(F(X+U)) = \vect(F(X)) +
+(\der\vect(F(X))\vect(U) + \vect(R(U,X)).\]
+
+Therefore now if \(Y=F(X)\) we now have that \[\der F(X) =
+\partialfrac{\vect(Y)}{\vect(X)'}\] i.e.  the derivative (or Jacobian) of \(F\)
+at \(X.\)
+
+We now need a way to find the derivative from an expression involving
+differentials and some way to perform the chain rule but with differentials. The
+ways to do this thing are called identification results and Cauchy's rule of
+invariance. The identification rules are \[\dif\vec f(\vec x) = A(\vec x)
+\dif\vec x \iff \der \vec f(\vec x) = A(\vec x)\] and \[\dif \vect(F(X)) = A(X)
+\dif\vect(X) \iff \der F(X) = A(X).\] These two rules, together with their
+special cases, are reported in table~\ref{tab:identifications}.
+
+\begin{table}
+\centering
+\begin{tabular}{cccc}
+ & \(x\) & \(\vec x\) & \(X\) \\[2pt]
+         \cline{2-4}
+\multicolumn{1}{r|}{\(\dif f =\)}
+    & \(a(x) \dif x\) & \(\vec a(\vec x)' \dif\vec x\) & \(\vect(A(X))' \dif\vect(X)\) \\
+\multicolumn{1}{r|}{\(\dif\vec f =\)}
+    & \(\vec a(x) \dif x\) & \(A(\vec x) \dif\vec x\) & \(A(X) \dif\vect(X)\) \\
+\multicolumn{1}{r|}{\(\dif F =\)}
+    & \(\vect(A(x)) \dif x\) & \(A(\vec x) \dif\vec x\) & \(A(X) \dif\vect(X)\)
+\end{tabular}
+\caption{Identification theorems~\cite{kinghorn1996}.}
+\label{tab:identifications}
+\end{table}
+
+These two rules mean that if we can manipulate an expression involving
+differentials so that it has the form on the right side of the equal sign in the
+left part of the logical equivalence, then we can ``harvest'' the derivative.
+
+Cauchy's rule of invariance states that \[\dif C(X; H) = \dif B(A(X); \dif
+A(X;H))\] which, if you squint hard enough, you notice that is it the same as the
+chain rule \[\der C(X) = \der B(A(X)) \der A(X)\] but for differential.
+
+We are now ready to state some useful properties of these differentials, let
+\(A\) an \(n \times m\) be a constant, \(X\) and \(Y\) variables of compatible
+sizes and \(S\) a square variable, then
+\begin{eqnarray*}
+    \dif A            &=& \leftidx{_n}{\vec 0}{}\,\leftidx{_m}{\vec 0}{'}, \\
+    \dif (a \cdot X)  &=& a \cdot \dif X, \\
+    \dif (X + Y)      &=& \dif X + \dif Y, \\
+    \dif (x \cdot X)  &=& (\dif x) \cdot X + x \cdot \dif X, \\
+    \dif (XY)         &=& (\dif X)Y + X \dif Y, \\
+    \dif (X \krone Y) &=& (\dif X) \krone Y + X \krone \dif Y, \\
+    \dif (X \hadam Y) &=& (\dif X) \hadam Y + X \hadam \dif Y, \\
+    \dif X^{{\cdot}a} &=& a \cdot X^{{\cdot}a-1} \hadam \dif X, \\
+    \dif a^{{\cdot}X} &=& \ln(a) \cdot a^{{\cdot}X} \hadam \dif X \\
+    \dif X'          &=& (\dif X)', \\
+    \dif\vect(X)      &=& \vect(\dif X), \\
+    \dif\trace(S)     &=& \trace(\dif S).
+\end{eqnarray*}
+
+The rules we have stated are in the general form and can appropriately be
+specialized for scalar and vector cases.
+
+After all this, we are finally ready for an example! Consider the softmax
+function for vectors \(\vec s(\vec x)\), we now proceed to find the value of
+\(\der\vec s(\vec x)\). First, let \(\vec y = e^{{\cdot}\vec x}\)for brevity,
+then we have that
+\begin{eqnarray}
+\dif\vec s(\vec x)
+&=& \dif\left((\vec 1' \vec y)^{-1} \cdot \vec y\right)\nonumber\\
+&=& \dif\left((\vec 1' \vec y)^{-1}\right) \cdot \vec y
+    + (\vec 1' \vec y)^{-1} \cdot \dif\vec y\nonumber\\
+&=& (\vec 1' \vec y)^{-1} \cdot \dif\vec y
+    - (\vec 1' \vec y)^{-2} \cdot \dif(\vec 1' \vec y) \cdot \vec y\nonumber\\
+&=& (\vec 1' \vec y)^{-1} \cdot \dif\vec y
+    - (\vec 1' \vec y)^{-2} \cdot (\vec 1' \dif\vec y) \cdot \vec y\nonumber\\
+&=& (\vec 1' \vec y)^{-1} \cdot \dif\vec y
+    - (\vec 1' \vec y)^{-2} \cdot \vec y \cdot (\vec 1' \dif\vec y)\nonumber\\
+&=& (\vec 1' \vec y)^{-1} \cdot \dif\vec y
+    - (\vec 1' \vec y)^{-2} \cdot \vec y \vec 1' \dif\vec y\label{eq:switcheroo}\\
+&=& \left((\vec 1' \vec y)^{-1} \cdot I
+    - (\vec 1' \vec y)^{-2} \cdot \vec y \vec 1'\right) \dif\vec y\nonumber\\
+&=& \left((\vec 1' e^{{\cdot}\vec x})^{-1} \cdot I
+    - (\vec 1' e^{{\cdot}\vec x})^{-2} \cdot e^{{\cdot}\vec x} \vec 1'\right)
+    \dif e^{{\cdot}\vec x}\nonumber\\
+&=& \left((\vec 1' e^{{\cdot}\vec x})^{-1} \cdot I
+    - (\vec 1' e^{{\cdot}\vec x})^{-2} \cdot e^{{\cdot}\vec x} \vec 1'\right)
+    e^{{\cdot}\vec x} \hadam \dif \vec x\nonumber\\
+&=& \left((\vec 1' e^{{\cdot}\vec x})^{-1} \cdot I
+    - (\vec 1' e^{{\cdot}\vec x})^{-2} \cdot e^{{\cdot}\vec x} \vec 1'\right)
+    \Diag(e^{{\cdot}\vec x}) \dif \vec x\nonumber\\
+&=& \left((\vec 1' e^{{\cdot}\vec x})^{-1} \cdot \Diag(e^{{\cdot}\vec x})
+    - (\vec 1' e^{{\cdot}\vec x})^{-2} \cdot e^{{\cdot}\vec x} \vec 1' \Diag(e^{{\cdot}\vec x})\right)
+    \dif \vec x\nonumber\\
+&=& \left((\vec 1' e^{{\cdot}\vec x})^{-1} \cdot \Diag(e^{{\cdot}\vec x})
+    - (\vec 1' e^{{\cdot}\vec x})^{-2} \cdot e^{{\cdot}\vec x} (e^{{\cdot}\vec x})'\right)
+    \dif \vec x\nonumber\\
+&=& (\Diag(\vec s(\vec x)) - \vec s(\vec x) \vec s(\vec x)') \dif\vec x\nonumber
+\end{eqnarray}
+Now thanks to the identification theorem, we have found our derivative.  In the
+equation~\ref{eq:switcheroo} a step has been performed that requires a bit of
+justification, i.e. the fact that \(\vec y \cdot (\vec 1' \dif\vec y) = \vec y
+\vec 1' \dif\vec y.\) This is simply explained if we think about the fact that
+\(n \cdot \vec y = \vec y \vec n',\) where \(n\) is a vector of size 1, and how
+matrix multiplication is defined.
+
+It is interesting to note that this result can be rewritten like this
+\[\Diag(\vec s(\vec x)) - \vec s(\vec x)^{{\cdot}2} \vec 1'.\] We will in
+section~\ref{sec:broadcasting} that formulations involving outer products with
+\(\vec 1\) can usually be implemented efficiently with broadcasting.
+
+We have found our first derivative, of a non-trivial function, using
+differentials and the identification theorem. The process was a bit long to make
+sure that things were as clear as possible, but with a bit of experience, the
+process can be streamlined by skipping some (or a lot) of steps.
+
+\section{Derivations}\label{sec:derivations}
+
+We have now almost all the instruments we need to derive the back-propagation
+formulas.
+
+Let us revamp the example from before using matrices, therefore let \(A\) and
+\(B\) be two square matrices and \(y = f(A,B) = \Vert\ln(A) + A B +
+\sin(B)\Vert^2.\) Again say we are interested in \(\partialfrac y A\) and
+\(\partialfrac y B.\) We can again evaluate the function one elementary
+operation at the time
+\begin{eqnarray*}
+A = X^{[-1]} &=& 2 \\
+B = X^{[0]}  &=& 5 \\
+    X^{[1]}  &=& \ln\left(X^{[-1]}\right) \\
+    X^{[2]}  &=& X^{[-1]} \times X^{[0]} \\
+    X^{[3]}  &=& \sin\left(X^{[0]}\right) \\
+    X^{[4]}  &=& X^{[1]} + X^{[2]} \\
+    X^{[5]}  &=& X^{[4]} + X^{[3]} \\
+y = x^{[6]}  &=& \Vert X^{[5]}\Vert^2.
+\end{eqnarray*}
+
+Thanks to how we have defined our matrix calculus we have that
+\begin{eqnarray*}
+    \partialfrac y {\vect(B)'}
+    &=& \partialfrac{x^{[6]}}{\vect\left(X^{[0]}\right)'} \\
+    &=& \underbrace{
+        \overbrace{
+            \partialfrac{x^{[6]}}{X^{[5]}} \partialfrac{X^{[5]}}{X^{[4]}}
+        }^{\partialfrac{x^{[6]}}{\vect\left(X^{[4]}\right)'}}
+        \partialfrac{X^{[4]}}{X^{[2]}}
+    }_{\partialfrac{x^{[6]}}{\vect\left(X^{[2]}\right)'}}
+    \partialfrac{X^{[2]}}{X^{[0]}}
+    + \overbrace{
+        \partialfrac{x^{[6]}}{X^{[5]}}
+        \partialfrac{X^{[5]}}{X^{[3]}}
+    }^{\partialfrac{x^{[6]}}{\vect\left(X^{[3]}\right)'}
+    } \partialfrac{X^{[3]}}{X^{[0]}}
+\end{eqnarray*}
+\begin{eqnarray*}
+    \partialfrac y {\vect(A)'}
+    &=& \partialfrac{x^{[6]}}{\vect\left(X^{[-1]}\right)'} \\
+    &=& \underbrace{
+        \overbrace{
+            \partialfrac{x^{[6]}}{X^{[5]}} \partialfrac{X^{[5]}}{X^{[4]}}
+        }^{\partialfrac{x^{[6]}}{\vect\left(X^{[4]}\right)'}}
+        \partialfrac{X^{[4]}}{X^{[2]}}
+    }_{\partialfrac{x^{[6]}}{\vect\left(X^{[2]}\right)'}} \partialfrac{X^{[2]}}{X^{[{-1}]}}
+    + \underbrace{
+        \overbrace{
+            \partialfrac{x^{[6]}}{X^{[5]}} \partialfrac{X^{[5]}}{X^{[4]}}
+        }^{\partialfrac{x^{[6]}}{\vect\left(X^{[4]}\right)'}}
+        \partialfrac{X^{[4]}}{X^{[1]}}
+    }_{\partialfrac{x^{[6]}}{\vect\left(X^{[1]}\right)'}}
+    \partialfrac{X^{[1]}}{X^{[-1]}}
+\end{eqnarray*}
+where some \(\vect\) and transpose are omitted for simplicity.
+
+Now let us proceed with the back-propagation algorithm step by step. Let
+\(\vect\left(\bar X^{[i]}\right)' = \partialfrac y {\vect\left(X^{[i]}\right)'}
+= \partialfrac{x^{[6]}}{\vect\left(X^{[i]}\right)'}\) then
+
+\begingroup
+\renewcommand{\partialfrac}[2]{\textstyle\frac{\partial#1}{\partial#2}}
+\let\oldvect\vect
+\renewcommand\vect[1]{\oldvect\mathchoice{\!}{}{}{}\left(#1\right)}
+\begin{eqnarray*}
+\bar x^{[6]}          &=& \partialfrac{x^{[6]}}{x^{[6]}} = 1 \\
+\left(\bar{\vec x}^{[5]}\right)' &=& \bar x^{[6]} \partialfrac{x^{[6]}}{\vect{X^{[5]}}'} \\
+\vect{\bar X^{[4]}}'  &=& \left(\bar{\vec x}^{[5]}\right)' \partialfrac{\vect{X^{[5]}}}{\vect{X^{[4]}}'} \\
+\vect{\bar X^{[3]}}'  &=& \left(\bar{\vec x}^{[5]}\right)' \partialfrac{\vect{X^{[5]}}}{\vect{X^{[3]}}'} \\
+\vect{\bar X^{[1]}}'  &=& \vect{\bar X^{[4]}}' \partialfrac{\vect{X^{[4]}}}{\vect{X^{[1]}}'} \\
+\vect{\bar X^{[2]}}'  &=& \vect{\bar X^{[4]}}' \partialfrac{\vect{X^{[4]}}}{\vect{X^{[2]}}'} \\
+\vect{\bar X^{[0]}}'  &=& \vect{\bar X^{[3]}}' \partialfrac{\vect{X^{[3]}}}{\vect{X^{[0]}}'} \\
+\vect{\bar X^{[-1]}}' &=& \vect{\bar X^{[2]}}' \partialfrac{\vect{X^{[2]}}}{\vect{X^{[-1]}}'} \\
+\vect{\bar X^{[0]}}'  &\pluseq\phantom+& \vect{\bar X^{[2]}}' \partialfrac{\vect{X^{[2]}}}{\vect{X^{[0]}}'} \\
+\vect{\bar X^{[-1]}}' &\pluseq\phantom+& \vect{\bar X^{[1]}}' \partialfrac{\vect{X^{[1]}}}{\vect{X^{[-1]}}'}
+\end{eqnarray*}
+\endgroup
+
+In general, what we are doing is always, while calculating the derivative of  a
+scalar value function \(X^{[j]} = F\!\left(X^{[i]}\right),\) where \(j > i,\)
+when performing back-propagation we have \[\vect\!\left(\bar X^{[i]}\right)' =
+\vect\!\left(\bar X^{[j]}\right)' \partialfrac{X^{[j]}}{X^{[i]}} =
+\partialfrac{x^{[n]}}{X^{[j]}} \partialfrac{X^{[j]}}{X^{[i]}} =
+\partialfrac{x^{[n]}}{X^{[i]}}.\]
+
+This is equivalent to doing the derivative in this way
+\[\vect\!\left(\bar X^{[i]}\right)'
+= \mathrm{vJp}_F\!\left(X^{[i]},X^{[j]}\right)
+= \partialfrac{\left\langle\bar X^{[j]},X^{[j]}\right\rangle}{\vect\!\left(X^{[i]}\right)'}
+= \partialfrac{\left\langle\bar X^{[j]},F\left(X^{[i]}\right)\right\rangle}{\vect\left(X{[i]}\right)'}.\]
+As we are going to see in the next sections
+this formulation, involving the vector-Jacobian product is much more useful.
+
+\subsection{Matrix Multiplication}
+
+Now let us set \(F(X) = X B,\) dropping the index for simplicity, let us also
+call \(\bar X^{[j]} = G.\) We now have that if we want to find the vJp for
+matrix multiplication we  have to find the derivative of \[\partialfrac{\langle
+G, X B \rangle}{\vect(X)'}.\]
+
+We can proceed using the differential calculus we have developed and then
+applying the appropriate identification theorem:
+\begin{eqnarray*}
+\dif\langle G, X B \rangle
+&=& \dif\trace(G' (X B)) \\
+&=& \trace(\dif(G'(X B))) \\
+&=& \trace(\dif G' X B + G' \dif(X B)) \\
+&=& \trace(G' \dif( XB)) \\
+&=& \trace(G'(\dif X\,B + X\dif B)) \\
+&=& \trace(G' \dif X\,B) \\
+&=& \trace(B G' \dif X) \\
+&=& \trace((G B')' \dif X)) \\
+&=& \vect(G B')' \vect(\dif X).
+\end{eqnarray*}
+Now with the identification theorem we get that the derivative is \(\vect(G B')'.\)
+
+Let us note that this expression is in function of two ``small'' dense matrices
+\(G\) and \(B.\) In this way we completely avoid the need to instantiate the
+sparse Jacobian of \(X B.\)
+
+We can do a similar thing for the function that left multiplies a matrix \(F(X) = A X.\)
+\begin{eqnarray*}
+\dif\langle G,A X\rangle
+&=& \dif\trace(G' A X) \\
+&=& \trace(G' A \dif X) \\
+&=& \trace((A' G)' \dif X).
+\end{eqnarray*}
+With the identification theorem we get that the derivative is  \(\vect(A' G)'.\)
+
+\subsection{Element-wise functions}
+
+One of the most used family of functions in neural networks is the one of
+element-wise functions i.e. functions that are applied to each element of a
+matrix. Many activation functions belong to this family, like ReLU and Sigmoid.
+It is therefore essential to learn how to back-propagate the gradient through
+this family of functions.
+
+First let us note that for an element-wise function \(F\) we have that its
+differential is \(\dif F(X) = \tilde F(X) \hadam \dif X,\) where \(\tilde F(X)\)
+is the derivative of the function applied to each element.\footnote{E.g the
+function applied to each element is \(\sin\) then the derivative is \(\cos\)
+applied to each element.} The reason is quickly explained if we think about what
+the differential does to each element of the matrix, that is, if we restrict
+ourselves to the scalar case we have \(\dif f(x) = \der f(x) \dif x.\)
+
+With the same setup as before we now have
+\begin{eqnarray*}
+\dif\langle G, F(X) \rangle
+&=& \dif\trace(G' F(X)) \\
+&=& \trace(\dif(G' F(X))) \\
+&=& \trace(\dif G' F(X) + G' \dif F(X)) \\
+&=& \trace(G' \dif F(X)) \\
+&=& \trace(G' (\tilde F(X) \hadam \dif X)) \\
+&=& \vect(G)' \vect(\tilde F(X) \hadam \dif X) \\
+&=& \vect(G)' \diag(\vect(\tilde F(X))) \vect(\dif X) \\
+&=& \vect(G \hadam \tilde F(X))' \vect(\dif X).
+\end{eqnarray*}
+Using the usual identification theorem we get that the vJp for element-wise
+functions is \(\vect(G \hadam \tilde F(X))'\)
+
+\subsection{Broadcasting}\label{sec:broadcasting}
+
+% http://coldattic.info/post/116/+
+% https://numpy.org/doc/stable/user/basics.broadcasting.html#:~:text=outer%20product+
+% https://lesia.obspm.fr/perso/thibaut-paumard/yorick-doc/manual/yorick_50.html+
+% https://stackoverflow.com/a/26950256+
+
+Broadcasting is a convenient and efficient way to implement outer products. It
+first appeared in Yorick~\cite{munro1995} and was then made popular by
+NumPy~\cite{harris2020}.
+
+When performing training on batches it is common, in the most common deep
+learning frameworks to write operations expression of this kind \(S(AX + \vec
+b)\) or \(S(AX + b)\). These two expressions have no well defined meaning in the
+standard mathematical language but in these frameworks usually mean add \(\vec
+b\) to every row of \(AX\), for the first case, and add \(b\) to every element
+of \(AX\) in the second. This behavior has the name of broadcasting and it is
+done to improve performance and reduce memory usage at the same time (since both
+kind of operations can be done without instantiating the matrices explicitly),
+therefore are worth implementing.
+
+This raises a question, how do we back-propagate through this kind of
+operations? Luckily the answer is easy. We can mathematically fix this
+expressions by adding a few multiplications with constants that keep the result
+identical and allow us to use the formalism that we have developed until now.
+We can therefore rewrite the two expressions in the following way
+\begin{eqnarray*}
+    S(AX + \vec b) &\Rightarrow& S(AX + \vec b \vec 1'), \\
+    S(AX + b)      &\Rightarrow& S(AX + b \cdot \vec 1 \vec 1').
+\end{eqnarray*}
+
+We are now going to derive the back-propagation formula for the broadcasting
+with a scalar. To simplify a bit our calculations later let  \(F(b) = b \cdot \vec
+1 \vec 1'.\), then
+\begin{eqnarray*}
+    \dif F(b)
+    &=& \dif(b \cdot \vec 1 \vec 1') \\
+    &=& \dif(b \cdot \vec 1) \vec 1' + b \vec 1 \dif \vec 1' \\
+    &=& \dif(b \cdot \vec 1) \vec 1' \\
+    &=& (\dif(b) \cdot \vec 1 + b \dif \vec 1) \vec 1' \\
+    &=& \dif b \cdot \vec 1  \vec 1' \\
+    &=& \vec 1 \vec 1' \cdot \dif b.
+\end{eqnarray*}
+
+Now we can proceed with the back-propagation through the broadcast of the scalar
+\begin{eqnarray*}
+    \dif\langle G,F(b)\rangle
+    &=& \dif\trace(G' F(b)) \\
+    &=& \trace(\dif(G' F(b))) \\
+    &=& \trace(\dif G' F(b) + G' \dif F(b)) \\
+    &=& \trace(G' \dif F(b))) \\
+    &=& \trace(G' \vec 1 \vec 1' \cdot \dif b)) \\
+    &=& \trace(G' \vec 1 \vec 1') \cdot \dif b \\
+    &=& \trace(\vec 1' G' \vec 1) \cdot \dif b \\
+    &=& \vec 1' G' \vec 1 \cdot \dif b.
+\end{eqnarray*}
+That is we just have to sum all the elements of \(G\). When we broadcast \(b\)
+the result is similar. In general we just have to sum the contributions along
+the broadcast dimensions.
+
+\subsection{Dropout}
+
+The dropout layer~\cite{srivastava2014} is commonly used for regularization
+technique to avoid overfitting. It is usually described as ``randomly drop units
+(along with their connections) from the neural network during training'' and it
+is usually implemented as an Hadamard multiplication with a random binary vector
+\(m\) that acts as a mask for the dropped units.
+
+Therefore for the vector case we can write \[\vec x \hadam \vec m,\] while for
+the matrix case we can either promote \(\vec m\) to a random binary matrix \(M\)
+\[X \hadam M\] or rely on broadcasting \[X \hadam \vec m \vec 1'.\]
+
+In either case is easy to derive expressions to back-propagate through this
+operations \(\dif\trace(G' (M \hadam X)) = \trace(G' (M \hadam \dif X)) =
+\trace((G' \hadam M') \dif X) = \trace((G \hadam M)' \dif X)\).
+
+\subsection{Attention}
+
+The attention is the core operation behind the transformer
+architecture~\cite{vaswani2017}. It operates on ``text'' represented as a
+sequence of vector embeddings in a matrix, say \(X\). It has three parameters to
+``learn'', \(W^{[q]},\) \(W^{[k]},\) and \(W^{[v]}.\)
+
+% https://en.wikipedia.org/wiki/Attention_(machine_learning)#Core_calculations
+Let \(Q = X W^{[q]},\) \(K = X W^{[k]},\) \(V = X W^{[v]}\). We can define the
+attention as \[V' S\left(\frac1{\sqrt{d}} \cdot K Q'\right),\] where \(d\) is
+the number of rows in \(X.\)
+
+If we break it down into its elementary operations we obtain
+\begin{eqnarray*}
+    X^{[1]} &= & (X W^{[q]})'\\
+    X^{[2]} &= & X W^{[k]}\\
+    X^{[3]} &= & X^{[2]} X^{[1]}\\
+    X^{[4]} &= & 1/\sqrt d \cdot X^{[3]}\\
+    X^{[5]} &= & S(X^{[4]})\\
+    X^{[6]} &= & (X W^{[v]})'\\
+    X^{[7]} &= & X^{[6]} X^{[5]}.
+\end{eqnarray*}
+In order to backpropagate through it we need to know how to propagate through
+scalar multiplication, transposed matrix multiplication and the softmax
+function. We are going to derive the latter, the other two are left as an easy
+exercise for the reader.
+
+Let \(A = \vec 1 \vec 1' e^{{\cdot}X}\)
+\begin{eqnarray*}
+\dif\langle G,S(X)\rangle
+&=& \trace\left(G' \dif \left(e^{{\cdot}X} \hadam A^{{\cdot}-1}\right)\right)\\
+&=& \trace\left(G' \left(
+    \dif e^{{\cdot}X} \hadam A^{{\cdot}-1}
+    + e^{{\cdot}X} \hadam \dif A^{{\cdot}-1}\right)\right)\\
+&=& \trace\left(G' \left(
+    e^{{\cdot}X} \hadam \dif X \hadam A^{{\cdot}-1}
+    + e^{{\cdot}X} \hadam -A^{{\cdot}-2} \hadam \dif A\right)\right)\\
+&=& \trace\left(G' \left(e^{{\cdot}X} \hadam A^{{\cdot}-1}
+    \hadam \left(\dif X - A^{{\cdot}-1} \hadam \dif A\right)\right)\right)\\
+&=& \trace\left(G'
+    \left(S(X) \hadam \left(\dif X - A^{{\cdot}-1} \hadam \dif A\right)\right)\right)\\
+&=& \trace\left((G' \hadam S(X)')
+    \left(\dif X - A^{{\cdot}-1} \hadam \dif A\right)\right)\\
+&=& \trace((G \hadam S(X))' \dif X)
+    - \trace\left((G \hadam S(X))' \left(A^{{\cdot}-1} \hadam \dif A\right)\right)
+\end{eqnarray*}
+Now let \(B = G \hadam S(X),\) so that \(\dif\langle G,S(X)\rangle = \trace(B' \dif X) - \trace\left(B' \left(A^{{\cdot}-1} \hadam \dif A\right)\right),\) then
+\begin{eqnarray*}
+\dif\langle G,S(X)\rangle
+&=& \trace(B' \dif X) - \trace\left(\left(B' \hadam \left(A^{{\cdot}-1}\right)'\right) \dif A\right)\\
+&=& \trace(B' \dif X) - \trace\left(
+    \left(B \hadam A^{{\cdot}-1}\right)' \vec 1 \vec 1'
+    \left(e^{{\cdot}X} \hadam \dif X\right)
+    \right)\\
+&=& \trace(B' \dif X)
+    - \trace\left(\left(\vec 1 \vec 1' \left(B \hadam A^{{\cdot}-1}\right)\right)'
+    \left(e^{{\cdot}X} \hadam \dif X\right)\right)\\
+&=& \trace(B' \dif X)
+    - \trace\left(\left(\left(\vec 1 \vec 1' \left(B \hadam A^{{\cdot}-1}\right)\right)' \hadam \left(e^{{\cdot}X}\right)'\right)
+    \dif X\right)\\
+&=& \trace(B' \dif X)
+    - \trace\left(\left(\vec 1 \vec 1' \left(B \hadam A^{{\cdot}-1}\right) \hadam e^{{\cdot}X}\right)'
+    \dif X\right)\\
+&=& \trace\left(
+    \left(
+    B' - \left(\vec 1 \vec 1' \left(B \hadam A^{{\cdot}-1}\right) \hadam e^{{\cdot}X}\right)'
+    \right)\dif X\right)\\
+&=& \trace\left(
+    \left(
+    B - e^{{\cdot}X} \hadam \vec 1 \vec 1' \left(B \hadam A^{{\cdot}-1}\right)
+    \right)' \dif X\right)\\
+&=& \trace\left(
+    \left(
+    B - e^{{\cdot}X} \Diag\left(\left(\vec 1' \left(B \hadam A^{{\cdot}-1}\right)\right)'\right)
+    \right)' \dif X\right).
+\end{eqnarray*}
+
+Now thanks to the identification theorem we get the formula that we need to
+propagate the gradient through the softmax function.
+
+\part{Practice}
+
+\chapter{Metal}
+
+There are three main ways to program modern GPUs. One is via some high-level
+library like MAGMA~\cite{tomov2010}, where you call functions that internally deal
+with GPU interaction and kernel implementation. Another possibility is to use a
+language like CUDA~\cite{nickolls2008} where you are in charge of the kernels and you
+have to interact more with the GPU. Finally, you can use APIs like
+OpenCL~\cite{stone2010} where, together with being in charge of the kernels, you
+have to control all interactions with the GPU.
+
+Since our main machine is a MacBook, to make use of our GPU we had to go the
+Apple's way.
+
+Modern Apple systems have a custom API/language called Metal gives you low
+level control much like OpenCL (or the CUDA Driver API).
+
+Apple's Metal has two components. The first is the ``Metal Shading Language''
+(MSL), which is the high-level language that is then compiled to the GPU's
+ISA\footnote{Often it is compiled to an intermediate binary format that is
+shipped with the application and at run time that binary is compiled to the ISA
+of the GPU available at that time on the machine.}, the second is the ``Metal
+Framework''\footnote{Framework is a kind of library on macOS.} which is an
+Objective-C library that allows you to communicate with the GPU.
+
+We are now going to describe both using an example, shown in
+figure~\ref{fig:metal1} and~\ref{fig:metal2}. You can compile the code
+with the following commands
+\begin{verbatim}
+$ clang traceme.m -framework Metal -framework CoreGraphics \
+    -framework Foundation -g -o traceme
+$ xcrun -sdk macosx metal simple.metal
+\end{verbatim}
+
+The first command is just a normal compiler invocation even if strangely to make
+the program work you also have to link with the CoreGraphics Framework (the
+reason may be that Metal is a unified compute and graphics API.). The second
+compiles the metal code to an intermediate representation and puts it in a file
+called \texttt{default.metallib}. It is important for this file to be kept in
+the same directory that contains the \texttt{traceme} binary, this is a quirk of
+how \texttt{[NSBundle mainBundle]} behaves with command line application.
+
+The binary can then run with \texttt{sudo dtruss -s traceme} to get a peek of
+what happens behind the curtains. You will see that it is quite a lot.
+
+\begin{figure}
+\centering
+\begin{minipage}{\textwidth}
+\footnotesize
+\begin{verbatim}
+#import <Metal/Metal.h>
+
+int main(void) {
+    uint len = 1023;
+    id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+    // Code loading.
+    id<MTLLibrary> lib = [dev newDefaultLibrary];
+    id<MTLFunction> fun = [lib newFunctionWithName:@"simple_function"];
+    id<MTLComputePipelineState> cps =
+        [dev newComputePipelineStateWithFunction:fun
+                                           error:nil];
+    // Data loading.
+    id<MTLBuffer> buf = [dev newBufferWithLength:len
+                                         options:MTLResourceStorageModeShared];
+    for (uint i = 0; i < len;  i++) ((float *)buf.contents)[i] = 1.f;
+    // Work submission.
+    id<MTLCommandQueue> cmdQueue = [dev newCommandQueue];
+    id<MTLCommandBuffer> cmdBuf = [cmdQueue commandBuffer];
+        id<MTLComputeCommandEncoder> cCmdEnc = [cmdBuf computeCommandEncoder];
+        [cCmdEnc setComputePipelineState:cps];
+        [cCmdEnc setBuffer:buf offset:0 atIndex:0];
+        [cCmdEnc setBytes:&(float){1.0f} length:sizeof 1.0f atIndex:1];
+        [cCmdEnc dispatchThreads:MTLSizeMake(len,1,1)
+           threadsPerThreadgroup:MTLSizeMake(cps.threadExecutionWidth,1,1)];
+        [cCmdEnc endEncoding];
+    [cmdBuf commit];
+    [cmdBuf waitUntilCompleted];
+    // Result.
+    float *res = buf.contents;
+    return 0;
+}
+\end{verbatim}
+\end{minipage}
+\caption{Content of the file \texttt{traceme.m}}
+\label{fig:metal1}
+\end{figure}
+
+\begin{figure}
+\centering
+\begin{minipage}{\textwidth}
+\footnotesize
+\begin{verbatim}
+[[kernel]] void
+simple_function(
+        device   float *x [[buffer(0)]],
+        constant float *a [[buffer(1)]],
+                 uint   i [[thread_position_in_grid]]
+    ) {
+    x[i] += 1.0f;
+    x[i] *= *a;
+}
+\end{verbatim}
+\end{minipage}
+\caption{Content of the file \texttt{simple.metal}}
+\label{fig:metal2}
+\end{figure}
+
+\section{Metal.Framework}
+
+Let us start by describing how to use Metal.Framework to interact with the GPU.
+
+The first thing that we have to do is to obtain a handle to a GPU device. Since
+this is an Objective-C Framework this ``handle'' and pretty much everything else
+in this API is an object. We can obtain the default GPU by calling the function
+\texttt{MTLCreateSystemDefaultDevice()}.
+
+In order to perform calculations on the GPU we need to load code and data on it
+and tell it to perform the actual calculations. This is done via Library, Buffer
+and CommandQueue objects.
+
+The Library object is used to load the code from a file and compilation, then from
+it you can obtain a Function object that gives you the possibility to set some
+constants in the function. From the Function object we can obtain a
+PipelaneState object, which as far as we understand the creation of this objects
+load the compiled kernel code on the GPU memory.
+
+To allocate the data that we need to process we use Buffer objects, which are a
+simple object that when created performs a \texttt{malloc} like function on the
+GPU.
+
+Finally, to submit work to the GPU we use a CommandQueue object in which we
+enqueue CommandBuffer in which multiple commands are encoded using command
+CommandEncoder objects.
+
+As you may have noticed we do not use explicit methods to move data to and from
+the GPU memory. While there are ways to force this behavior the library prefers
+to perform these actions inside other methods in an effort to simplify the usage
+of the API.
+
+When encoding commands we specify, the function to call via the compute pipeline
+state, the arguments by passing references to buffers and copying miscellaneous
+arguments directly to GPU memory, finally we specify the number of threads
+needed and the preferred group size. This allows to run the threads of the GPU
+in groups of non-uniform size avoiding the need to guard in the kernel for out
+of bound memory accesses.
+
+In figure~\ref{fig:metal.framework} we show a diagram that depicts how the
+various types in this API interact with each other.
+
+\begin{figure}
+\centering
+\includegraphics{figures.3}
+\caption{A graph showing the main types needed for sending work to an Apple GPU,
+with the \textsf{MTL} prefix removed for brevity.}
+\label{fig:metal.framework}
+\end{figure}
+
+The API is huge it does not only contains features related to GPGPU but also to
+graphics, here we have shown the minimal amount of information needed to
+understand its general usage pattern.
+
+\section{Metal Shading Language}
+
+The MSL is based on C++14, with some features missing like \texttt{new} and
+\texttt{delete} since on GPU you have to coordinate with the CPU to manage
+memory, it also adds some features and some restrictions (like \emph{address
+spaces}). These changes are needed to take advantage of all the peculiarities of
+GPU architectures.
+
+GPUs execute programs called either shaders or kernels (depending if we are
+talking about graphics or compute). Compute programs on GPUs are written as MSL
+functions (appropriately marked as \texttt{[[kernel]]}) and are executed in a
+parallel fashion. If you look at figure~\ref{fig:metal2} the index \texttt{i} is
+like the one used in loops. In fact GPU kernels are executed on a GPU like if
+they were in a big parallel for.
+
+The function takes two arguments, we are going to see later that the third is
+not really a function argument. The first is a pointer to a \texttt{float} with
+the \texttt{device} address space. This means that it will be placed in the
+GPU's global memory. The optional attribute \texttt{[[buffer(0)]]} is used to
+make explicit that the first call to \texttt{setBuffer} or \texttt{setBytes} is
+going to be assigned to that argument. The second argument has the
+\texttt{constant} address space that is always used for data located in the
+GPU's global memory but that can be cached in special GPU caches. Finally, the
+variable \texttt i is calculated automatically by the MSL (this is why it is not
+really an argument) and, as the name implies, contains the thread position in
+the grid. In our case each element in the input vector \texttt x is updated by a
+thread, therefore the position of the thread in the grid is just an index inside
+the the vector that said thread has to update.
+
+In table~\ref{tab:metal2cuda} how to translate between CUDA and Metal. By
+looking at that table we note that \verb+[[thread_position_in_grid]]+ is just
+the familiar expression \verb|blockDim.x*blockIdx.x + threadIdx.x| used in CUDA
+(for the one-dimensional case).
+
+\begin{table}
+\centering
+\begin{tabular}{ll}
+    Metal & CUDA \\
+    \multicolumn{2}{c}{Terminology} \\
+    thread       & thread \\
+    SIMD group   & thread warp \\
+    thread group & thread block \\
+    thread grid  & thread grid \\
+    % \hline
+    \multicolumn{2}{c}{Indexing} \\
+    % \hline
+    \verb+thread_position_in_threadgroup+ & \texttt{threadIdx} \\
+    \verb+threads_per_threadgroup+        & \texttt{blockDim} \\
+    \verb+threadgroup_position_in_grid+   & \texttt{blockIdx} \\
+    \verb+threads_per_grid+               & \texttt{gridDim} \\
+    \verb+threads_per_simdgroup+          & \texttt{warpSize} \\
+    % \hline
+    \multicolumn{2}{c}{Address Spaces} \\
+    % \hline
+    \texttt{device}      & \verb+__device__+ \\
+    \texttt{threadgroup} & \verb+__shared__+ \\
+    \texttt{constant}    & \verb+__constant__+ \\
+    \multicolumn{2}{c}{Synchronization} \\
+    \verb+threadgroup_barrier(metal::mem_flags)+ & \verb+__syncthreads()+ \\
+    \verb+simdgroup_barrier(metal::mem_flags)+   & \verb+__syncwarp()+
+\end{tabular}
+\caption{The terminology section shows the terms used to represent the same
+concepts. The indexing section shows MSL function input attributes and the
+equivalent global variables for CUDA. The address spaces section shows which
+keywords have to be used in MSL and CUDA to place object in certain portions of
+memory/caches. The synchronization section shows the functions to call to
+synchronize threads at the right granularity.}
+\label{tab:metal2cuda}
+\end{table}
+
+\iffalse
+\subsection{Peculiarities and Shortcomings}
+
+With our great surprise we have discovered that in the MSL the function
+\texttt{pow(x, y)}, when the compiler option \texttt{-ffast-math} is present
+(which it is by default), is rewritten as \texttt{exp2(y * log2(x))}. This is
+done because GPUs implement this two functions as single instruction, hence
+making the implementation more efficient than a classic one one involving the
+Taylor approximation of $e^x$, sadly this gives a \texttt{NaN} when \texttt x is
+negative. This problem was solved by disabling \texttt{-ffast-math} with
+\texttt{-fno-fast-math}. When don't understand why this is considered an
+acceptable transformation, maybe in computer graphics is really uncommon take
+the exponential of negative value.
+
+Another questionable thing happened with the Metal Performance Shaders (MPS)
+library and the their implementation of GEMM. To make a long story short we have
+implemented a specialized\footnote{In the sense that it does not support leading
+dimensions or implicit transpositions.} GEMM kernel that for certain dimensions
+is faster than the one provided by Apple. This can happen with performance
+focused implementations, the fact that makes this ``problematic'' is that we
+just tiled and coarsened the kernel (which are standard textbook techniques for
+improving the performance of GPU kernels) without going into any more advanced
+shenanigans or even doing any optimization specific to the architecture. The
+last two are things that one would expect Apple's engineers to do, in particular
+because they should have access to more advanced internal tools for GPU
+profiling etc\dots
+
+TODO: display the kernel that I'm talking about and show how the profiling was done.
+\fi
+
+\chapter{Implementation}
+
+Once we have derived all the formulas we need and we have understood how to
+communicate with the GPU we have all the instruments we need to implement our
+simple back-propagation library.
+
+The idea behind the implementation is simple. For each elementary operation we
+support we implement a GPU kernel for it. Then we provide a function (in C) that
+records the arguments passed to it as dependencies and allocates a buffer on the
+GPU of the appropriate size to hold the result and another one for the gradient.
+
+After having recorded the graph of the expression that calculates the loss for a
+neural network, we can initialize its parameters and inputs. Then we can proceed
+with the training. We can enqueue on the GPU commands to calculate the loss,
+propagate the gradient backward and finally update the parameters. These
+steps (together with updating the training data) can be performed in a loop to
+train the neural network.
+
+In figure~\ref{fig:sample-code} we show how to implement a single linear layer
+with sigmoid activation with a mean squared error loss. and overfit a single
+batch of data.
+
+\begin{figure}
+\begin{footnotesize}
+\begin{verbatim}
+// linear layer with sigmoid activation.
+Mat W = Mat_new((MShape){4,3}, true);
+Mat X = Mat_new((MShape){3,4}, false);
+Mat B = Mat_new((MShape){4,4}, true);
+Mat T = Mat_new((MShape){4,4}, false);
+Mat E = Mat_new(scalar_shape, false);
+Mat Y = Mat_sig(Mat_add(Mat_dot(W, X), B)); 
+
+// mean squared error loss
+Mat nT = Mat_neg(T);
+Mat YpnT = Mat_add(Y, nT);
+Mat YpnTe2 = Mat_pow(YpnT, E);
+Mat l = Mat_sum(YpnTe2);
+assert(l != 0);
+make_shared(l);
+
+for (int i = 0; i < 4*3; i++) {
+    ((float *)tape[W].fwd.contents)[i] = 1;
+    ((float *)tape[X].fwd.contents)[i] = 1;
+}
+for (int i = 0; i < 4*4; i++) {
+    ((float *)tape[B].fwd.contents)[i] = .5;
+    ((float *)tape[T].fwd.contents)[i] = 1;
+}
+*(float *)tape[E].fwd.contents = 2;
+
+// our objective for now is to overfit a batch (i.e. X, T).
+for (int i = 0; i < 10; i++) {
+    enqueue_forward(cmdQueue);
+    float loss = *(float *)tape[l].fwd.contents;
+    NSLog(@"%f", loss);
+    if (isnan(loss)) {
+        printMat(cmdQueue, E);
+        NSLog(@"");
+        printMat(cmdQueue, YpnT);
+        NSLog(@"");
+        printMat(cmdQueue, YpnTe2);
+        break;
+    }
+    enqueue_backward(cmdQueue);
+    enqueue_update_params(cmdQueue, -0.005);
+    enqueue_zero_grad(cmdQueue);
+}
+\end{verbatim}
+\end{footnotesize}
+\caption{Sample usage of the back-propagation library.}
+\label{fig:sample-code}
+\end{figure}
+
+\chapter*{Conclusions}
+
+The purpose of this work is to present the back-propagation algorithm in matrix
+form, providing the necessary tools to derive gradient propagation formulas and
+show how they can be used to implement a simple library to train neural
+networks.
+
+We have shown how to derive all the necessary results (i.e., matrix
+multiplication and element-based functions) to implement a back-propagation
+library, along with some auxiliary results (broadcasting and dropout) that are
+commonly used in deep neural networks.  Finally, we also showed how one can
+derive a vJp for the non-elementary operation \emph{softmax}. In this way, we
+have shown that with the right mathematical tools available, it is relatively
+easy to obtain these results.
+
+This is the first self-contained resource that allows any computer scientist,
+with a standard mathematical background, to derive back-propagation formulas for
+his or her operations. Until now, this was a major obstacle and anyone who had
+to implement such code needed either the help of a mathematician or laboriously
+and painfully to learn on its own.  With this work, we believe we have overcome
+this difficulty due to the organization and vastness of the literature, allowing
+anyone to obtain their own results more easily.
+
+We also have implemented a na\"ive back-propagation library that runs all of its
+operations on the GPU interfacing directly with the Metal API from Apple, and
+writing our own kernels. This shows how easy it can be to implement your own
+algorithm to train neural networks if one can derive the back-propagation
+formulas.
+
+Possible future work includes making derivations even easier by using direct
+sums and block matrices to represent operations involving batch matrix
+multiplications, for example multi-head attention (look at
+appendix~\ref{sec:direct-sums} for more context).
+
+Also on the implementation side, possible future directions include the
+possibility of generating GPU kernels on-demand via kernel fusion approaches. This
+allows not only to reduce training times by generating more efficient
+operations, but also to spare precious GPU RAM. The reason is quickly explained
+by an example. Let \(F\) and \(G\) be two element-wise functions and let \(H = G
+\circ F\) be their composition, then when performing the back-propagation
+through the two functions we have to store \(\bar F\) first to then calculate
+\(\bar G\), if we implement operator fusion instead, we only have to store
+\(\bar H.\)
+
+In the general deep learning literature one can find all sorts of architectures,
+we have explicitly focused on static DAGs, that is to say, graphs without
+control flow and fixed at the start, this is for simplicity but also due to the
+fact that the most common and successful architectures (multi-layer perceptrons,
+convolutional neural networks and transformers) are all static. We have also
+limited ourselves to the exclusive treatment of differentiable functions, always
+for the sake of simplicity, but the use of non-differentiable functions (think
+ReLU or max-pool) is ubiquitous in modern architectures. Luckily it is possible to
+generalize the concept of gradient to subgradient and include this kind of
+functions too in our framework.
+
+\iffalse
+Finally, since in deep learning it is common to use non-differentiable functions
+such as ReLU or max-pool, taking advantage of the approach used in this work,
+obtaining these functions will not be a problem since it is possible to
+generalize the concept of gradient to subgradient.
+\fi
+
+\appendix
+
+\iffalse
+\chapter{Why We Need Gradients in Machine Learning}
+
+% This infrocution is mostly taken from `Machine Learning: The Basics' book.
+% There is to correct/expicitate what is a random variable and what is a
+% realization of it. In particular I should use $p(x,y)$ to indicate the
+% distribution, not $\mathcal D$ which shuld be used to indicate the dataset.
+
+\cite{jung2022, goodfellow2016, shalev-shwartz2014}.
+
+As we have seen in section~\ref{sec:notable_results} machine learning algorithms
+can be used form many kind of tasks. We are now going to give a formal
+introduction to the field by restricting ourselves to the classification
+case\footnote{Since this work concerns itself with the derivation and
+implementation of the back-propagation this restriction does not really matter.
+It is just used as a simplification to introduce the key concepts that we are
+going to need.}.
+
+To formalize the notion of machine learning we are going to treat our data as a
+collection of data points $\mathbf x \in \mathcal X$. To each of those data
+points we are going to associate a label $y \in \mathcal Y$. Our objective,
+through the training algorithm, is to find a certain hypothesis $h : \mathcal X
+\to \mathcal Y$, in the hypothesis space $\mathcal H$, that dives the best
+prediction, as measured by $\ell : \mathcal X \times \mathcal Y \times \mathcal
+H \to \mathbf R$, the loss function. We are going to assume that all of our data
+point are the realization of the two i.i.d. random variables $X$ and $Y$ that
+come from the (unknown) joint probability distribution $\mathcal
+D$\footnote{This assumption would not be good for time series data.}.
+
+We can now define the risk of a hypothesis $h \in \mathcal H$ as
+\begin{displaymath}
+	\expected_{\mathbf x, y}[\ell(\mathbf x, y, h)] \mathrm .
+\end{displaymath}
+Therefore the hypothesis that gives the best prediction is
+\begin{displaymath}
+	h^* = \argmin_{h \in \mathcal H} \expected_{\mathbf x, y}[\ell(\mathbf x, y, h)] \mathrm .
+\end{displaymath}
+Sadly, as we have said before, the true distribution is unknown. Therefore even
+with huge amount of computational power ant time at our disposal we can't find
+the true $h^*$, we cannot minimize the risk.
+
+We have at our disposal the data $\mathcal D = \{(\mathbf x^{(1)}, y^{(1)}),
+\ldots, (\mathbf x^{(m)}, y^{(m)})\}$. Since we have assumed that our random
+variables are i.i.d. we can use the law of large numbers\footnote{In brief it
+states that the expected value (or average) of random variable, if it exists, it
+can be obtained from a large enough independent and identical samples.} to
+estimate the expected value of the loss. We call
+\begin{displaymath}
+	\hat h \in \argmin_{h \in \mathcal H} \frac 1 m
+		\sum_{i=1}^m \ell(\mathbf x^{(i)}, y^{(i)}, h)
+\end{displaymath}
+empirical risk minimization\footnote{We use set ownership notation because there
+might be more than one hypothesis that minimize the loss over the data.}. Now
+since we are interested in deep neural networks our parameter space is going to
+be parametrized by $\mathbf \theta$, the weights of the network\footnote{as with
+many things in math this is an abuse of notation. $\mathbf \theta$ is not a
+single vector, matrix or tensor but the entire set of weights. One can imagine
+this being a single vector that is sliced and reshaped accordingly to form each
+parameter of the network.}. Therefore if $f$ is the function that evaluates the
+neural network (our current hypothesis) and the loss, we can rewrite our
+empirical risk minimization as follows:
+\begin{equation}
+	\hat h \in \argmin_{\mathbf \theta \in \mathbf R^n} \frac 1 m
+		\sum_{i=1}^m f(\mathbf x^{(i)}, y^{(i)}; \theta) \mathrm .
+		\label{eq:erm}
+\end{equation}
+
+Now equation~\ref{eq:erm} is a classical \emph{unconstrained} optimization
+problem. Also since $f$ is a neural network, we have access to it's
+gradient\footnote{In practice for a function being differentiable is not enough
+to make sure that optimization algorithms that use the gradient works well.
+There are certain properties like being Lipschitz continuous which are also
+necessary. But in general neural networks are functions whit have such
+properties and it is beyond the scope of this work to talk about this
+conditions.
+
+Also due to the common use of non differentiable function like ReLU we need the
+more general concept of a Clarke subdifferential\dots But we since we wanted a
+degree we are going to ignore this kinds of functions and restrict ourselves to
+only differentiable ones.}.
+
+% This section is taken from `An Introduction To Optimization'. A clenanup of
+% the notation is also needed.
+
+Given a point $\mathbf x$, $\nabla f(\mathbf x)$\footnote{We drop the parameter
+notation for simplicity.}, if different from the zero vector, is a vector
+orthogonal to the tangent hyper-plane passing per $\mathbf x$. $-\nabla f
+(\mathbf x)$ gives us the direction with the maximum rate of decrease of $f$ at
+$x$, which is a good direction to follow if we want to minimize $f$.
+
+Let us now consider the first order Taylor expansion of a function $f:\mathbf
+R^n \to \mathbf R$ ($\mathbf a$ and $\mathbf b$ need to be near each other)
+
+\begin{displaymath}
+	f(\mathbf b) \approx f(\mathbf a) + \nabla f(\mathbf a)(\mathbf b - \mathbf a) \mathrm .
+\end{displaymath}
+
+Let us now set $\mathbf a = \mathbf x^{(0)}$ and $\mathbf b = \mathbf x^{(0)} -
+\alpha\nabla f(x^{(0)})'$ for some $\alpha > 0$, therefore $\mathbf b - \mathbf
+a = -\alpha\nabla f(x^{(0)})'$. We now get
+\begin{eqnarray*}
+	f(\mathbf x^{(0)} - \alpha\nabla f(x^{(0)})')
+	&\approx& f(\mathbf x^{(0)}) + \nabla f(\mathbf x^{(0)})(-\alpha\nabla f(\mathbf x^{(0)})') \\
+	&=& f(\mathbf x^{(0)}) - \alpha\nabla f(\mathbf x^{(0)})^2 \mathrm .
+\end{eqnarray*}
+
+Now since $\alpha\nabla f(\mathbf x^{(0)})^2 > 0$, we get that for a
+sufficiently small $\alpha$
+\begin{displaymath}
+	f(\mathbf x^{(0)} - \alpha\nabla f(x^{(0)})') < f(\mathbf x^{(0)}) \mathrm ,
+\end{displaymath}
+
+This means that, if we are trying to minimize $f$, $\mathbf x^{(0)} -
+\alpha\nabla f(x^{(0)})'$ is an improvement over the point $\mathbf x^{(0)}$.
+
+Our assumptions require $\mathbf a$ to be near $\mathbf b$ and $\alpha$ to be
+small. Therefore if we want to minimize $f$ we can iterate this procedure as
+such:
+\begin{displaymath}
+	\mathbf x^{(k+1)} \leftarrow x^{(k)} - \alpha\nabla f(\mathbf x^{(k)})' \mathrm .
+\end{displaymath}
+
+This is a so called \emph{gradient descent} algorithm because of the continuous
+decrease of the value of $f$.
+
+Finally if we go back to equation~\ref{eq:erm}, lets now call the mean inside
+$\argmin$ $F$. If we plug $F$ in the gradient descent formula we get by the
+linearity of the gradient operator that we have to sum the evaluate the gradient
+of $f$ over all the data.
+
+The algorithm by itself is trivial if not for piece that sums the gradient over
+the data. This piece of the algorithm is going to be what the rest of this
+work is about.
+
+\iffalse %{
+We could simplify the introduction by assuming single vector arguments and
+convex optimization to then discharge those assumption later. This would allow
+us to talk about this challenges in the generalization of this concepts.
+
+We have to explicit that we don't care about over-fitting or regularization and
+that stochastic approximation via randomly sampled minibatch are actually used.
+
+Right now we ignore the local minima problem since we are not in the convex
+case.
+
+I have to use Cauchy-Schwarz to prove that negative gradient is always the
+steepest descent direction.
+\fi %}
+\fi
+
+\chapter{Slicing}\label{sec:slicing}
+
+\newcommand\slice{\mathrm{Slice}}
+\newcommand\sss[2]{#2{s}{#1}#2{t}{#1}#2{p}}
+
+It is common in programming languages to access the elements of an array in
+various ways. The most common are by index and by \emph{slicing}. The latter is
+a primitive form of down-sampling in which starting at and element \(s\) we take
+elements \(t\) step apart until we reach the stop element at index \(p.\) The
+notation used is usually \(x_{\sss:{}}.\)\footnote{\(s\)tart, s\(t\)op,
+ste\(p.\)} In matrices this notations can be combined between each other as
+shown in table~\ref{tab:slice}.
+
+\begin{table}
+    \newcommand{\p}{\tilde}
+    \centering
+    \begin{tabular}{cccc}
+                                   & \(i\)       & :           & \(\sss:{}\) \\[2pt]
+                                   \cline{2-4}
+        \multicolumn{1}{r|}{\(j\)} & \(A_{i,j}\) & \(A_{:,j}\) & \(A_{\sss:{},j}\) \\
+        \multicolumn{1}{r|}{:}     & \(A_{i,:}\) & \(A_{:,:}\) & \(A_{\sss:{},:}\) \\
+        \multicolumn{1}{r|}{\(\sss:\p\)} & \(A_{i,\sss:{\p}}\) & \(A_{:,\sss:\p}\) & \(A_{\sss:{},\sss:\p}\)
+    \end{tabular}
+    \caption{All possible combinations of indexing notations for a matrix.}
+    \label{tab:slice}
+\end{table}
+
+Slicing of a matrix \(A\) can be implemented as the multiplication with a
+binary matrix, generated by a \(\slice(\sss,{})\) function. Therefore we can say
+that \(A_{\sss:{},\sss:\tilde}\) is just a shorthand for \[\slice(\sss,{}) \, A
+\, \slice(\sss,\tilde)'.\]
+
+To give a more concrete example let \(\vec x\) be a vector of arbitrary length, if we
+want to take every 3rd element of it starting at index 2 and less than 11 we
+have \[\slice(2,3,8) \, \vec x
+= \left[\begin{array}{cccccccccc}
+    0&1&0&0&0&0&0&0&0&\cdots\\
+    0&0&0&0&1&0&0&0&0&\cdots\\
+    0&0&0&0&0&0&0&1&0&\cdots
+\end{array}\right] \vec x.\]
+
+We note that for any ``slice matrix'' we have that \(\slice(\sss,{}) \leftidx{_m}{\vec 1}{} =
+\leftidx{_n}{\vec 1}{},\) that is to say that each row has a single 1 in it.
+
+The other indexing notation in table~\ref{tab:slice} can also be implemented via
+matrix multiplication. Let \(A\) be an \(n \times m\) matrix and \(x\) be of
+lenght \(n\), than using the standard basis vectors we have that
+\(\leftidx{_n}{\vec e}{^{[i]}}\)
+\begin{eqnarray*}
+    A_{i,j} &=& \left(\vec e^{[j]}\right)' A \vec e^{[i]}, \\
+    A_{:,j} &=& A \vec e^{[i]}, \\
+    A_{i,:} &=& \left(\vec e^{[j]}\right)' A, \\
+    x_i     &=& x' \vec e^{[i]}.
+\end{eqnarray*}
+
+\chapter{Direct Sums}\label{sec:direct-sums}
+
+\newcommand{\Z}{\phantom{{}'}\vec 0 \vec 0'}
+
+Let the direct sum operation be\footnote{The Kronecker product is sometimes
+called the direct product.} \[ A \oplus B =
+\left[\begin{array}{cc}A&\Z\\\Z&B\end{array}\right].\] If we represent a batch
+of matrices as \(\bigoplus_{i=1}^n A^{[i]},\) (sometimes it is also written as
+\(\Diag\!\left(A^{[1]},\ldots,A^{[n]}\right),\) then the batched matrix
+multiplication with a matrix W is \[
+\left(\bigoplus_{i=1}^n A^{[i]}\right) (\vec 1 \krone W)
+= \left[\begin{array}{ccc}
+    A^{[1]} & \cdots & \Z \\
+    \vdots & \ddots & \vdots \\
+    \Z & \cdots & A^{[n]}
+\end{array}\right]
+\left[\begin{array}{c}W \\ \vdots \\ W \end{array}\right]
+= \left[\begin{array}{c}A^{[1]} W \\ \vdots \\ A^{[n]} W\end{array}\right].\]
+At this point we can apply a normal element-wise activation function to the
+entire batch of matrices.
+
+If we need to apply bias we can similarly do \[
+\left[\begin{array}{c}A^{[1]} W\\ \vdots \\ A^{[n]} W\end{array}\right]
++ (\vec 1 \krone \vec b \vec 1')
+= \left[\begin{array}{c}
+    A^{[1]} W + \vec b \vec 1' \\ \vdots \\ A^{[n]} W + \vec b \vec 1'
+\end{array}\right].
+\]
+
+We notice that \(\vec 1 \krone W\) is just another form of broadcasting since it
+involves a product with a vector of ones.
+
+% https://math.hecker.org/2011/06/25/multiplying-block-diagonal-matrices/
+Alternatively we could have broadcasted \(W\) in a block diagonal form and using
+blocked diagonal matrix multiplication we could have obtained
+\begin{eqnarray*}
+\left(\bigoplus_{i=1}^n A^{[i]}\right) (I \krone W)
+&=& \left[\begin{array}{ccc}
+    A^{[1]} & \cdots & \Z \\
+    \vdots & \ddots & \vdots \\
+    \Z & \cdots & A^{[n]}
+\end{array}\right]
+\left[\begin{array}{ccc}
+    W & \cdots & \Z \\
+    \vdots & \ddots & \vdots \\
+    \Z & \cdots & W
+\end{array}\right] \\
+&=& \left[\begin{array}{ccc}
+    A^{[1]} W & \cdots & \Z \\
+    \vdots & \ddots & \vdots \\
+    \Z & \cdots & A^{[n]} W
+\end{array}\right] \\
+&=& \left(\bigoplus_{i=1}^n A^{[i]} W\right).
+\end{eqnarray*}
+
+% https://stackoverflow.com/questions/596216/formula-to-determine-perceived-brightness-of-rgb-color
+We can also use direct sum to represent colored images. Let \(R,\) \(G\) and
+\(B\) be the red, green and blue channel of an image, and let  \(\vec l =
+[\begin{array}{ccc}r&g&b\end{array}]'\) be the scalars used for
+the linear combination to convert the channels into luminance. Then we can
+convert an image in grayscale with the following formula
+\begin{eqnarray*}
+(\vec 1' \krone I) (R \oplus G \oplus B) (\vec l \krone I)
+&=& (\vec 1' \krone I)
+\left[\begin{array}{ccc}
+    R & 0 & 0 \\
+    0 & G & 0 \\
+    0 & 0 & B
+\end{array}\right]
+\left[\begin{array}{c}r \cdot I \\ g \cdot I \\ b \cdot I\end{array}\right] \\
+&=& [\begin{array}{ccc}I & I & I\end{array}]
+\left[\begin{array}{c}r \cdot R \\ g \cdot G \\ b \cdot B\end{array}\right] \\
+&=& r \cdot R + g \cdot G + b \cdot B.
+\end{eqnarray*}
+
+Now say that you are given a block ``vector''  \(\mathbf A =
+\left[\begin{array}{ccc}\left(A^{[1]}\right)' & \cdots &
+\left(A^{[n]}\right)'\end{array}\right]'\) and that you want to turn it into a
+block diagonal matrix, that is \(\bigoplus_{i=1}^n A^{[i]}.\) We can do this in the
+following way \[\mathbf A (\vec 1' \krone I) \hadam (I \krone \vec 1 \vec 1').\]
+
+It may be more helpful to look at its expanded form \[
+\left[\begin{array}{c}A^{[1]} \\ \vdots \\ A^{[n]}\end{array}\right]
+\left[\begin{array}{ccc}I & \cdots & I\end{array}\right]
+\hadam
+\left[\begin{array}{ccc}
+    \phantom{{}'}\vec 1 \vec 1' & \cdots & \Z \\
+    \vdots & \ddots & \vdots \\
+    \Z & \cdots & \phantom{{}'}\vec 1 \vec 1'
+\end{array}\right].
+\] This is basically an outer product followed by a mask, that is very similar
+to how we have defined the \(\Diag\) operator. Hence we are going to call this
+the \(\mathrm{DIAG}\) operator, \(\mathrm{DIAG}(\mathbf{A}) = \bigoplus_{i=1}^n
+A^{[i]}.\)
+
+We can now express the multi-head attention, let
+\(\mathbf W^{[q]} = \bigoplus_{i=1}^n \left(W^{[q]}\right)^{[i]},\)
+\(\mathbf W^{[k]} = \bigoplus_{i=1}^n \left(W^{[k]}\right)^{[i]},\)
+\(\mathbf W^{[v]} = \bigoplus_{i=1}^n \left(W^{[v]}\right)^{[i]},\)
+\(\mathbf K = \mathbf W^{[k]} (I \krone X),\)
+\(\mathbf Q = \mathbf W^{[q]} (I \krone X)\) and
+\(\mathbf V = \mathbf W^{[v]} (I \krone X)\)
+then \[
+\mathbf V'
+S\left(
+    \frac1{\sqrt{d}}
+    \cdot \mathbf K \mathbf Q' (\vec 1 \krone I)
+\right)
+W^{[o]}.
+\]
+
+\iffalse %{
+\chapter{Batch Normalization}
+
+The mean of a vector \(x\) of size \(n\) is \(\mu(x) = \frac 1 n 1_n' x\) while
+its variance is \(\mu(x^{{\cdot}2}) - \mu(x)^2.\) Let \(X\) be an \(n \times m\)
+then the mean of its rows is \[\tilde m(X) = \frac 1 m \cdot X 1_m,\] then, if
+we let \(Y = X - \title m(X) 1_n',\) the variance along each row is \[v(X) =
+\tilde m\left(X^{{\cdot}2}\right) - \tilde m(X)^{{\cdot}2} = \frac 1 n \cdot
+\diag(Y Y'),\] where \(\frac 1 n \cdot Y Y'\) is the covariance matrix.
+
+Now with the help of broadcasting we can write the batch normalization
+layer~\cite{ioffe2015} as \[(X - \tilde m(X)) \hadam v(X)^{{\cdot}-\frac 1 2}
+\hadam g + b,\] which can be rewritten as \[\left(X - \tilde m(X) 1_m'\right)
+\hadam \left(v(X) 1_m'\right)^{{\cdot}-\frac 1 2} \hadam g 1_m' + b 1_m',\]
+where \(g\) and \(b\) are the trainable parameters.
+
+We are now ready to derive the formulas to propagate the gradient through the
+layer. Since the expression is big we will proceed piece by piece.
+
+\begin{eqnarray*}
+    X_1 &=& \tilde m(X) 1_m' \\
+    X_2 &=& X - X_1 \\
+    X_3 &=& v(X) 1_m' = \frac 1 n \cdot \diag(X_2 X_2') 1_m'\\
+    X_4 &=& X_2 \hadam X_3^{{\cdot}-\frac 1 2} \\
+    X_5 &=& X_4 \hadam g 1_m' + b 1_m'
+\end{eqnarray*}
+
+\begin{eqnarray*}
+\dif\left\langle G,\tilde m(X) 1_m'\right\rangle
+&=& \dif\trace(G' (1/m \cdot X 1_m) 1_m') \\
+&=& \dif\trace(G' (1/m \cdot X) 1_m 1_m') \\
+&=& \dif\trace(1_m 1_m' G' (1/m \cdot X)) \\
+&=& \trace(1_m 1_m' G' (1/m \cdot \dif X)) \\
+&=& \trace((1_m 1_m')' G' (1/m \cdot \dif X)) \\
+&=& \trace((G (1_m 1_m'))' (1/m \cdot \dif X)) \\
+&=& \vect((G (1_m 1_m'))') 1/m \cdot \dif\vect(X) \\
+&=& \vect(1/m \cdot G (1_m 1_m'))' \dif\vect(X) \\
+&=& \vect(\tilde m(G) 1_m')' \dif\vect(X)
+\end{eqnarray*}
+
+The back-propagation formula for \(x_2\) is just \(G\) for the left operand and
+\(-G\) for the right one.
+
+\comment{disegnare il grafo delle dipendenze per la batch norm...}
+
+\begin{eqnarray*}
+\dif\langle G,v(X)1_m'\rangle
+&=& 
+\end{eqnarray*}
+\comment{Provare a derivare l'espressione pezzo pezzo}
+
+\begin{eqnarray*}
+\dif\left\langle G,N(X) \hadam g 1_m' + b 1_m'\right\rangle
+&=& \dif\trace(G'(N(X) \hadam g 1_m' + b 1_m')) \\
+&=& \trace(G' \dif(N(X) \hadam g 1_m' + b 1_m')) \\
+&=& \trace(G' \dif(N(X) \hadam g 1_m')) \\
+&=& \trace(G' (N(X) \hadam \dif (g 1_m'))) \\
+&=& \trace(G' (N(X) \hadam ((\dif g) 1_m'))) \\ % Usiamo la ``nuova proprietà'' qua
+&=& \trace((G' \hadam N(X)') (\dif g) 1_m') \\
+&=& \trace((N(X) \hadam G)' (\dif g) 1_m') \\
+&=& \trace(1_m' (N(X) \hadam G)' \dif g) \\
+&=& 1_m' (N(X) \hadam G)' \dif g \\
+&=& ((N(X) \hadam G) 1_m)' \dif g
+\end{eqnarray*}
+
+\chapter{Misc.}
+
+\comment{Derivare la derivata della moltiplicazione tra matrici ma ricordare il
+problema che è troppo grossa\dots}
+
+The derivative of the right matrix multiplication is
+\[\partialfrac{\vect(AB)}{\vect(A)'} = B' \krone I,\] this matrix is very big
+and sparse\dots
+
+Before we can calculate the vJp for the right matrix multiplication we have to
+introduce a new concept\footnote{Later we are going to see that we can make it
+so that we can avoid this complication.}
+
+
+If \(G\) has size \(n \times m\) then the binary matrix \(K^{(n,m)}\) is the one
+such that \(K^{(n,m)} \vect(G) = \vect(G').\) For any commutation matrix \(K\)
+of any size we have \(K' K = K K' = I,\) hence \(K' = K^{-1}.\)
+
+Finally for every \(n \times m\) matrix \(A\) and every \(r \times q\) matrix
+\(B\), \(K^{(r,n)}(A \krone B) K^{(m,q)} = B \krone A.\)
+
+The identity matrix ha size \(m \times m.\) \(B\) has size \(q \times m\)
+
+\begin{eqnarray*}
+\vect(G)' (B' \krone I)
+    &=& \vect(G)' K' (I \krone B') K \\
+    &=& \vect(G)' K' (B \krone I)' K \\
+    &=& ((B \krone I) K \vect(G) )' K \\
+    &=& ((B \krone I) K K' \vect(G') )' K \\
+    &=& ((B \krone I) \vect(G') )' K \\
+    &=& \vect(G' B)' K \\
+    &=& (K \vect(B' G))' K \\
+    &=& \vect(B' G)' K' K \\
+    &=& \vect(B' G)' \\
+    &=&  \\
+    &=& \vect(G)' (B \krone I)'  \\
+    &=& \vect(G)' (B \krone I)' I \\
+    &=& \vect(G)' (B \krone I)' K' K \\
+    &=& (K (B \krone I) \vect(G))' K \\
+    &=& (K \vect(G B'))' K \\
+    &=& \vect(G B')' K' K \\
+    &=& \vect(G B')' \\
+\end{eqnarray*}
+
+First, let us notice that (by looking at table~\ref{tab:identifications}), the
+total derivative of a scalar function of vector argument \(\dif \phi(x) = \sum_i
+\partialfrac\phi{x_i} \dif x_i = \langle a(x),\dif x\rangle,\) and for matrix
+argument we have \(\dif\phi(X) = \langle A(X),\dif X\rangle.\)
+
+\comment{Devo esplicitare il bene la precedenza e come uso le parentesi con
+\(\dif\) e \(\der\)}
+
+If we let \(g' = \nabla\phi(x)\) we have \[\der\phi(x) = (\nabla\phi(x)) x =
+\langle g', x \rangle.\] Similarly for matrices we have that if \(G' =
+\vect^{-1}(\nabla\phi(X))\) then we have \[\der\phi(X) = \trace(G X) = \langle
+G', X \rangle.\] \comment{Does Magnus agree with this transpose?}
+
+Important things, calculating the directional derivative is a linear operation
+that is performed by applying the Jacobian matrix \(J\) to a directions vector \(v\) as
+such \(Jv\). This is the case because the Jacobian contains in its columns all
+the partial derivatives i.e. the directional derivatives w.r.t. every canonical
+direction \(e_i^n\). For a scalar function \(\phi\) we have that the directional
+derivative is \(\langle v, \nabla\phi(x)' \rangle\). This can be generalized to
+matrices with the Frobenius inner product i.e. \(\langle V, \nabla\phi(X)'
+\rangle.\) Also the total derivative of a scalar function \(\phi(X)\) can be
+expressed in terms of differentials as \(\langle G, \dif X \rangle,\) where
+\(G\) is the gradient.
+
+There is another way to think about this. First let us consider that with
+broadcasting we can define a generalization of the matrix-scalar power that we
+are going to call the Hadamard power operation, i.e. given two matrices \(A\)
+and \(E\), both of size \(n \times m\), when we write \(A^{{\hadam}E}\) it
+calculates \(\alpha_{i,j}^{\epsilon_{i,j}}\) for each \(i,j.\)
+
+We can use it with the Napier's constant \(e\) to neatly express the
+element-wise exponential function applied to a matrix \(X\) of size \(n \times
+m\) as \(e^{{\hadam}X} \Rightarrow (e 1_n 1_m')^{{\hadam}X}.\)
+
+Let us say that we are interested in back-propagating through \(\beta\) in
+the following expression \(C = A^{{\hadam}\beta}.\)\footnote{Mainly because
+every other binary operation supports back-propagation though the left and the
+right argument.} We have \[
+C = A^{{\hadam}\beta} \Rightarrow A^{{\hadam}\beta \cdot 1_n 1_m'} 
+= A^{{\hadam}\left[\begin{array}{cc}\beta&\beta\\\beta&\beta\end{array}\right]}
+= A^{{\cdot}\beta}.
+\]
+
+Which since scalar and matrix back propagation are semantically equivalent, this
+is the same as doing
+\begin{eqnarray*}
+    \chi_1 &=& \alpha_{1,1}^\beta = \alpha_1^\beta \\
+    \chi_2 &=& \alpha_{1,2}^\beta = \alpha_2^\beta \\
+    \chi_3 &=& \alpha_{2,1}^\beta = \alpha_3^\beta \\
+    \chi_4 &=& \alpha_{2,2}^\beta = \alpha_4^\beta
+\end{eqnarray*}
+with scalar back-propagation. If we think at the graph representation of this
+operation we have that \(\beta\) has an out-degree of 4 and when we
+back-propagate through it we have to sum the contribution of 4 nodes to obtain
+its gradient, that is if we let \(c = [\begin{array}{cccc}\chi_1& \chi_2&
+\chi_3& \chi_4 \end{array}]'\) and \(g =
+[\begin{array}{cccc}\bar\chi_1& \bar\chi_2& \bar\chi_3& \bar\chi_4
+\end{array}]'\) then \[
+\bar\beta
+    = g' \partialfrac c \beta
+    = \sum_{i=1}^{4} \bar\chi_i \times \partialfrac{\chi_i}{\beta}
+    = \sum_{i=1}^{4} \bar\chi_i \times \chi_i \times \ln(\alpha_i),
+\] which is summing all the contributions from the gradients accumulated during
+the back-propagation in a single variable. which is exactly what we have done
+before in the case of scalar broadcasting for the addition.
+
+The areas of automatic differentiation and deep learning are really wide, there
+are therefore many things that we are not going to cover in this work.
+
+For example we are only going to concern ourselves with differentiation of
+static DAGs, while it is possible to differentiate control flow
+constructs\footnote{Both using an execution tracing approach and representing
+this operations directly in our static graph.} (like \texttt{if}, \texttt{for},
+\dots) and through data structures.
+
+There are also other operations that needed by some important deep learning
+architectures (convolution is probably the most important one missing) but we
+are not going to talk about them. Also our discussion is going to naively assume
+that all our functions are differentiable, but the really common ReLU activation
+function is not differentiable at all points. Our derivations can work also for
+some non differentiable function if we generalize the concept of gradient to
+sub-gradient.
+\fi %}
+
+\bibliographystyle{plain}
+\bibliography{bibliography}
+
+\end{document}

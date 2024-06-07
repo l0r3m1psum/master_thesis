@@ -1,0 +1,524 @@
+\documentclass[noamsthm]{beamer}
+\usetheme{sapienza}
+% \logo{\includegraphics[width=0.09\paperwidth]{assets/logo_RGB}}
+\titlebackground*{assets/background}
+
+\setbeamertemplate{footline}{}
+
+\input{common}
+
+\title{Demystifying Back-Propagation}
+\subtitle{Matrix calculus for the working computer scientist}
+\author{Diego Bellani}
+\IDnumber{1838645}
+\course{Computer Science}
+%\AccademicYear
+\date{Academic Year 2023/2024}
+
+\setlength{\parskip}{1em plus2pt}
+
+% https://tex.stackexchange.com/questions/146529/design-a-custom-beamer-theme-from-scratch
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+\begin{frame}{Training neural networks}
+Neural networks are trained via the gradient descent algorithm
+\[\theta^{[n+1]} = \theta^{[n]} - \epsilon \nabla j\!\left(\theta^{[n]}\right)\!.\]
+
+The most important step in this algorithm is the calculation of the gradient.
+\end{frame}
+
+\begin{frame}{Gradient calculation}
+\emph{Back-propagation} is the algorithm used to calculate the gradient.
+
+At its core it is a conceptually simple and efficient algorithm.
+
+If we deal only with scalars its implementation is also trivial.
+\end{frame}
+
+\begin{frame}{The topic of this thesis}
+\framesubtitle{Filling a gap in the literature}
+There is surprisingly little (accessible) information about back-propagation
+with matrices as primitives.
+
+We want to allow any computer scientist\footnote{With a standard mathematical background.}
+to derive formulas for back-propagating through matrix expressions.
+
+This was done by using a \emph{matrix calculus} from the econometric literature.
+\end{frame}
+
+\begin{frame}{Why care?}
+\begin{itemize}
+\item Implementing the algorithm in another language.
+\item Optimize it (e.g. implementing custom operations on exotic hardware.)
+\item Debug current implementations (e.g. there may be subtle numerical issues.)
+\end{itemize}
+\end{frame}
+
+\section{Back-propagation}
+
+\begin{frame}{An illustrative example}
+Let \[y = f(a,b) = \ln(a) + a b - \sin(b),\] we can evaluate it piece by piece
+as such
+\begin{eqnarray*}
+a = x^{[-1]} &=& 2 \\
+b = x^{[0]}  &=& 5 \\
+    x^{[1]}  &=& \ln\left(x^{[-1]}\right) = \ln(2) \\
+    x^{[2]}  &=& x^{[-1]} \times x^{[0]} = 2 \times 5 \\
+    x^{[3]}  &=& \sin\left(x^{[0]}\right) = \sin(5) \\
+    x^{[4]}  &=& x^{[1]} + x^{[2]} \approx 0.693 + 10 \\
+y = x^{[5]}  &=& x^{[4]} + x^{[3]} \approx 10.693 + 0.959
+\end{eqnarray*}    
+\end{frame}
+
+\begin{frame}{Dependency graph}
+Then we can look at \(y\)'s dependency graph
+\begin{center}
+\includegraphics{figures.2}
+\end{center}
+\end{frame}
+
+\begin{frame}{Total derivatives}
+We know by looking at the graph and with basic calculus that \[
+    \partialfrac y b = \partialfrac{x^{[5]}}{x^{[0]}}
+    = \overbrace{
+        \partialfrac{x^{[5]}}{x^{[4]}} \partialfrac{x^{[4]}}{x^{[2]}}
+    }^{\partialfrac{x^{[5]}}{x^{[2]}}} \partialfrac{x^{[2]}}{x^{[0]}}
+    + \partialfrac{x^{[5]}}{x^{[3]}} \partialfrac{x^{[3]}}{x^{[0]}},
+\] and similarly for the other derivative we have that \[
+    \partialfrac y a = \partialfrac{x^{[5]}}{x^{[-1]}}
+    = \overbrace{
+        \partialfrac{x^{[5]}}{x^{[4]}} \partialfrac{x^{[4]}}{x^{[1]}}
+    }^{\partialfrac{x^{[5]}}{x^{[1]}}} \partialfrac{x^{[1]}}{x^{[-1]}}
+    + \overbrace{\partialfrac{x^{[5]}}{x^{[4]}} \partialfrac{x^{[4]}}{x^{[2]}}
+    }^{\partialfrac{x^{[5]}}{x^{[2]}}} \partialfrac{x^{[2]}}{x^{[-1]}}.
+\]
+\end{frame}
+
+\begingroup
+\renewcommand{\partialfrac}[2]{\textstyle\frac{\partial#1}{\partial#2}}
+\begin{frame}{Evaluating the derivatives}
+\framesubtitle{Avoiding redundant calculations}
+Let \(\bar x^{[i]} = \partialfrac y {x^{[i]}},\) then we propagate the gradient in topological order
+\begin{eqnarray*}
+\bar x^{[5]}    &=& \partialfrac{x^{[5]}}{x^{[5]}} = 1 \\
+\bar x^{[4]}    &=& \bar x^{[5]}\partialfrac{x^{[5]}}{x^{[4]}}
+    = \bar x^{[5]} \times 1 = 1 \\
+\bar x^{[3]}    &=& \bar x^{[5]}\partialfrac{x^{[5]}}{x^{[3]}}
+    = \bar x^{[5]} \times (-1) = -1 \\
+\bar x^{[1]}    &=& \bar x^{[4]}\partialfrac{x^{[4]}}{x^{[1]}}
+    = \bar x^{[4]} \times 1 = 1 \\
+\bar x^{[2]}    &=& \bar x^{[4]}\partialfrac{x^{[4]}}{x^{[2]}}
+    = \bar x^{[4]} \times 1 = 1 \\
+\bar x^{[0]}    &=& \bar x^{[3]}\partialfrac{x^{[3]}}{x^{[0]}}
+    = \bar x^{[3]} \times \cos\left(x^{[0]}\right) \approx -0.282 \\
+\bar x^{[-1]} &=& \bar x^{[2]}\partialfrac{x^{[2]}}{x^{[-1]}}
+    = \bar x^{[2]} \times x^{[0]} = 5 \\
+\bar x^{[0]}    &\pluseq\phantom+& \bar x^{[2]}\partialfrac{x^{[2]}}{x^{[0]}}
+    = \bar x^{[2]} \times x^{[-1]} \approx 1.716 \\
+\bar x^{[-1]} &\pluseq\phantom+& \bar x^{[1]}\partialfrac{x^{[1]}}{x^{[-1]}}
+    = \frac{\bar x^{[1]}}{x^{[-1]}} = 5.5
+\end{eqnarray*}
+\end{frame}
+\endgroup
+
+\begin{frame}{The vector case}
+Let us now focus on the vector case, where \[y = f(\vec a,\vec b) = \Vert\!\ln(\vec a) + \vec a \hadam \vec b - \sin(\vec b)\Vert^2,\]
+the procedure is much the same, we just have to be careful about a few things\dots
+\end{frame}
+
+\begingroup
+\renewcommand\matrix{\left[\begin{array}{ccc}&&\\&&\\&&\end{array}\right]}
+\renewcommand\vector{\left[\begin{array}{ccc}&&\end{array}\right]}
+\begin{frame}{Why we go backward}
+Now associativity matters,
+\[\partialfrac{x^{[n]}}{\vec x^{[n-1]}} \partialfrac{\vec x^{[n-1]}}{\vec x^{[n-2]}}
+\cdots \partialfrac{\vec x^{[1]}}{\vec x^{[0]}},\]
+if we look at the shapes
+\[\vector \matrix \cdots \matrix\!\!.\]
+This is why it is called \emph{back-propagation}. We propagate the gradient
+backward in the dependency graph.
+\end{frame}
+\endgroup
+
+\begin{frame}{vector-Jacobian product (vJp)}
+\framesubtitle{Taking advantage of Jacobians' sparsity}
+Let us focus on \(\vec g' \partialfrac{\sin(\vec b)}{\vec b'}\) (or any
+element-wise function,) where \(\vec g'\) is the gradient we propagated so far.
+We have that \[
+\vec g' \partialfrac{\sin(\vec b)}{\vec b'}
+= \vec g' \left[\begin{array}{ccc}
+    \cos(b_1) & \cdots & 0 \\
+    \vdots & \ddots & \vdots \\
+    0 & \cdots & \cos(b_n)
+\end{array}\right]
+= \vec g' \hadam cos(\vec b)'.
+\]
+Hence (almost always) we can perform the vector-matrix multiplication without
+explicit instantiation of the Jacobian.
+\end{frame}
+
+\begin{frame}{So far so good\dots}
+But what about gradient propagation through functions of matrix argument and value?
+Lets look at
+\[\partialfrac{x^{[n]}}{\vec X^{[n-1]}} \partialfrac{\vec X^{[n-1]}}{\vec X^{[n-2]}}
+\cdots \partialfrac{\vec X^{[1]}}{\vec X^{[0]}}.\]
+\begin{itemize}
+\item What shape do they even have (i.e. how do we arrange the partial derivatives)?
+\item How do we multiply this mathematical objects?
+\item Does the chain rule apply?
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Current approaches}
+Given the fact that we have already have back-propagation implementation for matrices how did they do it?
+\begin{itemize}
+\item Indices and summations,
+\item tensors~\cite{laue2018} (Ricci calculus) or
+\item operator theory.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Indices and summations}
+Very accessible but it just does not scale, some derivations can be done, but it
+gets out of hand quickly.
+
+Therefore except for some examples nobody really uses it.
+\end{frame}
+
+\begin{frame}{Ricci calculus}
+The tensor approach can be used but the math is\dots Hard.
+
+Legend has it that even Einstein was helped on the topic by Marcel Grossmann.
+\end{frame}
+
+\begin{frame}{Operators theory}
+The approaches based on operator theory usually go something like
+\begin{quote}
+Something, something inner product spaces, something, something adjoint
+trick\dots This is the result. Okay moving on\dots
+\end{quote}
+
+Again not very accessible\dots
+\end{frame}
+
+\begin{frame}{Matrix calculus is the answer}
+\framesubtitle{Right?}
+There is no standard ``Matrix Calculus''.
+
+Most of them just ignore the concept of high order Jacobian.
+
+All of them do not care about back-propagation.
+\end{frame}
+
+\iffalse
+\begin{frame}{We need another approach}
+Whatever we are going to do our generalized Jacobians needs
+\begin{itemize}
+\item to contain all possible partial derivatives;
+\item a definition of multiplication to propagate the gradient;
+\item a reasonable chain rule.
+\end{itemize}
+\end{frame}
+\fi
+
+\begin{frame}{The problem}
+We need to derive vJps for operations involving matrices, so that we can propagate the gradient.
+
+If we upgrade our running example to
+\[y = f(A,B) = \Vert\!\ln(A) + A B - \sin(B)\Vert^2,\]
+we see that we just need vJps for all the \emph{elementary} operations, the
+back-propagation algorithm is otherwise unchanged.
+\end{frame}
+
+\begin{frame}{Me for a few months}
+\framesubtitle{Trying to put together the pieces of the puzzle}
+\centering
+\includegraphics[height=\textheight]{res/pepesilvia.jpg}
+\end{frame}
+
+\section{Matrix Calculus}
+
+\begin{frame}{Enter matrix calculus}
+\framesubtitle{By Magnus and Naudecker~\cite{magnus2019}}
+Let \(\vec y=\vec f(\vec x)\) than
+\[
+    \der\vec f(\vec x)
+    = \partialfrac{\vec y}{\vec x'}
+    = \left[\begin{array}{ccc}
+        \partialfrac{\vec y_1}{\vec x_1} & \cdots & \partialfrac{\vec y_1}{\vec x_m} \\
+        \vdots & \ddots & \vdots \\
+        \partialfrac{\vec y_n}{\vec x_1} & \cdots & \partialfrac{\vec y_n}{\vec x_m}
+    \end{array}\right]\!\!.
+\] 
+\end{frame}
+
+\begin{frame}{Differentials}
+\framesubtitle{For scalars}
+The definition of the derivative
+\[\lim_{h \to 0} \frac{f(x + h) - f(x)}h = \der f(x)\]
+can be rewritten as
+\[f(x + h) = f(x) + (\der f(x))h + r(h,x),\]
+where \(\lim_{h \to 0} r(h,x) = 0.\)
+
+Here \(\dif(x;h) = (\der f(x))h\) is the differential.
+\end{frame}
+
+\begin{frame}{Differentials}
+\framesubtitle{Generalizations}
+We can do similar reasoning for vector functions
+\[\vec f(\vec x + \vec h) = \vec f(\vec x) + (\der\vec f(\vec x))\vec h + \vec r(\vec h,\vec x)\]
+we can generalize our definition to the matrix
+\[\vect(F(X+H)) = \vect(F(X)) + (\der\vect(F(X))\vect(H) + \vect(R(H,X)).\]
+
+Hence the \(\dif(X;H)=(\der\vect(F(X))\vect(H),\) which is just a big vector.
+\end{frame}
+
+\begin{frame}{Derivative of a matrix}
+\framesubtitle{Just a big matrix}
+Let \(Y=F(X)\) than
+\[\der F(X) = \partialfrac{\vect(Y)}{\vect(X)'}.\]
+This is a generalization of the classic definition, we can interpret the rank
+and determinant as usual and the chain rule is the same~\cite{magnus2007}.
+\end{frame}
+
+%Cauchy's rule of invariance
+
+\begin{frame}{Matrix differential calculus}
+\framesubtitle{With a simpler notation}
+\begin{eqnarray*}
+\dif A            &=& \vec 0 \vec 0', \\
+\dif (a \cdot X)  &=& a \cdot \dif X, \\
+\dif (X + Y)      &=& \dif X + \dif Y, \\
+\dif (x \cdot X)  &=& (\dif x) \cdot X + x \cdot \dif X, \\
+\dif (XY)         &=& (\dif X)Y + X \dif Y, \\
+\dif (X \hadam Y) &=& (\dif X) \hadam Y + X \hadam \dif Y, \\
+\dif X^{{\cdot}a} &=& a \cdot X^{{\cdot}a-1} \hadam \dif X, \\
+\dif a^{{\cdot}X} &=& \ln(a) \cdot a^{{\cdot}X} \hadam \dif X, \\
+\dif X'           &=& (\dif X)', \\
+\dif\vect(X)      &=& \vect(\dif X), \\
+\dif\trace(S)     &=& \trace(\dif S).
+\end{eqnarray*}
+\end{frame}
+
+\begin{frame}{Identification theorems}
+The identification rules are \[\dif\vec f(\vec x) = A(\vec x)
+\dif\vec x \iff \der \vec f(\vec x) = A(\vec x)\] and \[\dif \vect(F(X)) = A(X)
+\dif\vect(X) \iff \der F(X) = A(X).\]
+\begin{tabular}{cccc}
+ & \(x\) & \(\vec x\) & \(X\) \\[2pt]
+         \cline{2-4}
+\multicolumn{1}{r|}{\(\dif f =\)}
+    & \(a(x) \dif x\) & \(\vec a(\vec x)' \dif\vec x\) & \(\vect(A(X))' \dif\vect(X)\) \\
+\multicolumn{1}{r|}{\(\dif\vec f =\)}
+    & \(\vec a(x) \dif x\) & \(A(\vec x) \dif\vec x\) & \(A(X) \dif\vect(X)\) \\
+\multicolumn{1}{r|}{\(\dif F =\)}
+    & \(\vect(A(x)) \dif x\) & \(A(\vec x) \dif\vec x\) & \(A(X) \dif\vect(X)\)
+\end{tabular}
+\end{frame}
+
+\begin{frame}{The last piece of the puzzle}
+While calculating the derivative of  a scalar value function \(X^{[j]} =
+F\!\left(X^{[i]}\right),\) where \(j > i,\) when performing back-propagation we
+have \[\vect\!\left(\bar X^{[i]}\right)' =
+\vect\!\left(\bar X^{[j]}\right)' \partialfrac{X^{[j]}}{X^{[i]}} =
+\partialfrac{x^{[n]}}{X^{[j]}} \partialfrac{X^{[j]}}{X^{[i]}} =
+\partialfrac{x^{[n]}}{X^{[i]}}.\]
+
+This is equivalent to
+\[\vect\!\left(\bar X^{[i]}\right)'
+= \mathrm{vJp}_F\!\left(X^{[i]},X^{[j]}\right)
+= \partialfrac{\left\langle\bar X^{[j]},X^{[j]}\right\rangle}{\vect\!\left(X^{[i]}\right)'}
+= \partialfrac{\left\langle\bar X^{[j]},F\left(X^{[i]}\right)\right\rangle}{\vect\left(X{[i]}\right)'}.\]
+\end{frame}
+
+\section{Derivations}
+
+\begin{frame}{The contribution}
+
+Given a function \(F(X)\) that you want to back propagate through, write
+{\LARGE\[\dif\langle G, F(X)\rangle\]}
+then apply differentials until you can use the identification theorem.
+\end{frame}
+
+\begin{frame}{Matrix multiplication}
+\framesubtitle{Now is easy!}
+\begin{minipage}{.5\textwidth}
+\begin{eqnarray*}
+\lefteqn{\dif\langle G, X B \rangle} \\
+&=& \dif\trace(G' (X B)) \\
+&=& \trace(G' (\dif X) B) \\
+&=& \trace(B G' \dif X) \\
+&=& \trace((G B')' \dif X)) \\
+&=& \vect(G B')' \vect(\dif X) \\
+\end{eqnarray*}
+\end{minipage}%
+\begin{minipage}{.5\textwidth}
+\begin{eqnarray*}
+\lefteqn{\dif\langle G,A X\rangle} \\
+&=& \dif\trace(G' A X) \\
+&=& \trace(G' A \dif X) \\
+&=& \trace((A' G)' \dif X) \\
+&=& \vect(A' G)' \vect(\dif X). \\
+&& \\
+\end{eqnarray*}
+\end{minipage}
+\end{frame}
+
+\begin{frame}{Element-wise functions}
+For an element-wise function \(F\) we have its differential is \(\dif F(X) =
+\tilde F(X) \hadam \dif X,\) where \(\tilde F(X)\) is the derivative of the
+function applied to each element.
+\begin{eqnarray*}
+\dif\langle G, F(X) \rangle
+&=& \dif\trace(G' F(X)) \\
+&=& \trace(\dif(G' F(X))) \\
+&=& \trace(\dif G' F(X) + G' \dif F(X)) \\
+&=& \trace(G' \dif F(X)) \\
+&=& \trace(G' (\tilde F(X) \hadam \dif X)) \\
+&=& \vect(G)' \vect(\tilde F(X) \hadam \dif X) \\
+&=& \vect(G)' \diag(\vect(\tilde F(X))) \vect(\dif X) \\
+&=& \vect(G \hadam \tilde F(X))' \vect(\dif X).
+\end{eqnarray*}
+\end{frame}
+
+\begin{frame}{Broadcasting}
+It is common to write \(AX + \vec b\) to mean
+\(AX + \vec b \vec 1',\) or \(AX + b\) to mean \(AX + b \cdot
+\vec 1 \vec 1'.\) For example
+let  \(F(b) = b \cdot \vec 1 \vec 1',\) then
+\begin{minipage}{.45\textwidth}
+\begin{eqnarray*}
+\lefteqn{\dif F(b)} \\
+&=& \dif(b \cdot \vec 1 \vec 1') \\
+&=& \dif(b \cdot \vec 1) \vec 1' + b \vec 1 \dif \vec 1' \\
+&=& \dif(b \cdot \vec 1) \vec 1' \\
+&=& (\dif(b) \cdot \vec 1 + b \dif \vec 1) \vec 1' \\
+&=& \dif b \cdot \vec 1  \vec 1' \\
+&=& \vec 1 \vec 1' \cdot \dif b. \\
+&& \\
+&& \\
+\end{eqnarray*}
+\end{minipage}%
+\begin{minipage}{.5\textwidth}
+\begin{eqnarray*}
+\lefteqn{\dif\langle G,F(b)\rangle} \\
+&=& \dif\trace(G' F(b)) \\
+&=& \trace(\dif(G' F(b))) \\
+&=& \trace(\dif G' F(b) + G' \dif F(b)) \\
+&=& \trace(G' \dif F(b))) \\
+&=& \trace(G' \vec 1 \vec 1' \cdot \dif b)) \\
+&=& \trace(G' \vec 1 \vec 1') \cdot \dif b \\
+&=& \trace(\vec 1' G' \vec 1) \cdot \dif b \\
+&=& \vec 1' G' \vec 1 \cdot \dif b. \\
+\end{eqnarray*}
+\end{minipage}
+\end{frame}
+
+\begin{frame}{Softmax}
+\framesubtitle{Trust me on this one}
+Let
+\(S(X) = e^{{\cdot}X} \hadam \left(\vec 1 \vec 1' e^{{\cdot}X}\right)^{{\cdot}-1}\) then
+\[\dif\langle G,S(X)\rangle = \trace\!\left(
+    \left(
+    B - e^{{\cdot}X} \Diag\left(\left(\vec 1' \left(B \hadam A^{{\cdot}-1}\right)\right)'\right)
+    \right)' \dif X\right)\!,\]
+where \(A = \vec 1 \vec 1' e^{{\cdot}X}\) and \(B = G \hadam S(X).\)\footnote{Numerical issues aside.}
+\end{frame}
+
+\section{Implementation}
+
+\begin{frame}{Implementation}
+The results of our derivations have been used to implement a simple deep
+learning library using Apple's Metal.\footnote{Because it is ``what the convent
+delivers''.}
+
+And the resulting gradient confronted, with the state of the art PyTorch
+library, by implementing the same neural network in both and comparing the
+results up to a certain numerical error.
+\end{frame}
+
+\begin{frame}[fragile]{A taste of Metal.Framework}
+\framesubtitle{A fairly low level API}
+\footnotesize
+\begin{verbatim}
+id<MTLCommandQueue> cmdQueue = [dev newCommandQueue];
+id<MTLCommandBuffer> cmdBuf = [cmdQueue commandBuffer];
+id<MTLComputeCommandEncoder> cCmdEnc = [cmdBuf computeCommandEncoder];
+[cCmdEnc setComputePipelineState:cps];
+[cCmdEnc setBuffer:buf offset:0 atIndex:0];
+[cCmdEnc setBytes:&(float){1.0f} length:sizeof 1.0f atIndex:1];
+[cCmdEnc dispatchThreads:MTLSizeMake(len,1,1)
+   threadsPerThreadgroup:MTLSizeMake(cps.threadExecutionWidth,1,1)];
+[cCmdEnc endEncoding];
+[cmdBuf commit];
+\end{verbatim}
+\end{frame}
+
+\begin{frame}[fragile]{A taste of Metal Shading Language}
+\framesubtitle{An high level language}
+\footnotesize
+\begin{verbatim}
+[[kernel]] void
+simple_function(
+        device   float *x [[buffer(0)]],
+        constant float *a [[buffer(1)]],
+                 uint   i [[thread_position_in_grid]]
+    ) {
+    x[i] += 1.0f;
+    x[i] *= *a;
+}
+\end{verbatim}
+\end{frame}
+
+
+\section{Conclusion}
+
+\begin{frame}{Conclusion}
+\framesubtitle{And future work}
+This is the first self-contained resource that allows any computer scientist,
+with a standard mathematical background, to derive back-propagation formulas for
+his or her operations.
+\end{frame}
+
+\begin{frame}{Future work}
+\framesubtitle{Direct sums and products}
+\newcommand{\Z}{\phantom{{}'}\vec 0 \vec 0'}
+
+Batched matrix multiplication with a matrix \(W\) is \[
+\left(\bigoplus_{i=1}^n A^{[i]}\right) (\vec 1 \krone W)
+= \left[\begin{array}{ccc}
+    A^{[1]} & \cdots & \Z \\
+    \vdots & \ddots & \vdots \\
+    \Z & \cdots & A^{[n]}
+\end{array}\right]
+\left[\begin{array}{c}W \\ \vdots \\ W \end{array}\right]
+= \left[\begin{array}{c}A^{[1]} W \\ \vdots \\ A^{[n]} W\end{array}\right]\!\!.\]
+
+If we need to apply bias we can similarly do \[
+\left(\bigoplus_{i=1}^n A^{[i]}\right) (\vec 1 \krone W)
++ (\vec 1 \krone \vec b \vec 1')
+= \left[\begin{array}{c}
+    A^{[1]} W + \vec b \vec 1' \\ \vdots \\ A^{[n]} W + \vec b \vec 1'
+\end{array}\right]\!\!.
+\]
+\end{frame}
+
+% TODO: rimuovere numeri lucidi
+% TODO Citare un po' di cose...
+
+\begin{frame}
+\centering
+\LARGE Fin.
+
+\footnotesize Questions?
+\end{frame}
+
+\begin{frame}{Bibliography}
+\bibliographystyle{alpha}
+\bibliography{bibliography}
+\end{frame}
+
+\end{document}
